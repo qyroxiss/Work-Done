@@ -1,0 +1,185 @@
+WORKDONE MANAGEMENT SYSTEM
+COMPLETE TECHNICAL DOCUMENTATION
+
+1. PROJECT OVERVIEW
+WorkDone Management System is an internal office web application for assigning, tracking, and managing employee work. It is designed for multiple computers on an office LAN.
+
+2. TECHNOLOGY STACK
+Frontend: React + TypeScript
+Backend: Node.js + Express
+Database: Microsoft SQL Server 2019, 2022, or 2025, subject to driver and compatibility testing
+Authentication: Server-side authentication with secure password hashing and role-based authorization
+
+3. USER ROLES
+Admin: Manage users, employees, products, product groups, assignments, reports, and system settings.
+Manager: Create and assign work, monitor progress, review completed work, and view permitted reports.
+Employee: View assigned work, update progress, add work notes, and submit work for review.
+Permissions must be enforced by the backend, not only by hiding frontend buttons.
+
+4. CORE MODULES
+A. Login and Logout: Validate credentials, create a secure session or token, enforce inactivity/session expiry, and log important security events.
+B. Employee Master: Employee code, name, department, contact details, joining date, active status.
+C. Product Group Master: Group code, group name, description, active status.
+D. Product Master: Product code, product name, product group, description, active status.
+E. Work Assignment: Work number, title, description, product/group, priority, start date, due date, creator, and one or more assigned employees.
+F. Work Status: Pending, In Progress, On Hold, Completed, Closed, and Reopened where authorized.
+G. Work Grid: Searchable table with work number, title, product, assigned employees, priority, due date, status, and last update.
+H. Filters: Date range, employee, product group, product, status, priority, and assigned/unassigned work.
+I. Reports: Employee-wise work, pending work, overdue work, completed work, and date-wise work summary.
+
+5. DATABASE DESIGN
+Use a dedicated SQL Server database, for example WorkDoneDB. Define primary keys, foreign keys, unique constraints, indexes, and audit timestamps.
+
+Suggested tables:
+Users(UserId, Username, PasswordHash, Role, EmployeeId, IsActive, CreatedAt, UpdatedAt)
+Employees(EmployeeId, EmployeeCode, EmployeeName, Department, Phone, Email, JoiningDate, IsActive, CreatedAt, UpdatedAt)
+ProductGroups(ProductGroupId, GroupCode, GroupName, Description, IsActive, CreatedAt)
+Products(ProductId, ProductCode, ProductName, ProductGroupId, Description, IsActive, CreatedAt)
+WorkItems(WorkId, WorkNo, Title, Description, ProductId, Priority, Status, StartDate, DueDate, CreatedByUserId, CreatedAt, UpdatedAt, ClosedAt)
+WorkAssignments(AssignmentId, WorkId, EmployeeId, AssignedByUserId, AssignedAt, IsActive)
+WorkStatusHistory(HistoryId, WorkId, OldStatus, NewStatus, ChangedByUserId, Notes, ChangedAt)
+
+Recommended relationships:
+Users.EmployeeId references Employees.EmployeeId when the account belongs to an employee.
+Products.ProductGroupId references ProductGroups.ProductGroupId.
+WorkItems.ProductId references Products.ProductId, when a product is selected.
+WorkAssignments.WorkId references WorkItems.WorkId.
+WorkAssignments.EmployeeId references Employees.EmployeeId.
+WorkStatusHistory.WorkId references WorkItems.WorkId.
+
+Use a junction table such as WorkAssignments to support assigning one work item to multiple employees. Prevent duplicate active assignments using suitable constraints or transaction logic. Use foreign keys and transactions to keep data consistent. Decide whether deleting master records should be blocked or replaced with inactive status; avoid deleting records referenced by historical work.
+
+6. APPLICATION ARCHITECTURE
+Browser on office computer -> React frontend -> Express API -> SQL Server.
+The browser must not connect directly to SQL Server. The backend should validate input, check permissions, execute parameterized SQL, and return only necessary fields.
+
+Suggested folder structure:
+workdone/
+  frontend/
+    src/
+      components/
+      pages/
+      services/
+      types/
+      hooks/
+  backend/
+    src/
+      routes/
+      controllers/
+      services/
+      middleware/
+      validators/
+      database/
+      config/
+    .env
+  database/
+    schema.sql
+    indexes.sql
+    seed.sql
+  docs/
+
+Adapt this structure to the actual repository and existing files rather than overwriting working code blindly.
+
+7. RECOMMENDED API ENDPOINTS
+POST /api/auth/login
+POST /api/auth/logout
+GET /api/auth/me
+GET /api/employees
+POST /api/employees
+PUT /api/employees/:id
+GET /api/product-groups
+POST /api/product-groups
+GET /api/products
+POST /api/products
+GET /api/work-items
+POST /api/work-items
+GET /api/work-items/:id
+PUT /api/work-items/:id
+POST /api/work-items/:id/assignments
+PATCH /api/work-items/:id/status
+GET /api/reports/work-summary
+GET /api/reports/pending-work
+GET /api/reports/employee-work
+
+These are design recommendations, not a claim that these endpoints already exist. Apply authentication and role authorization to every protected endpoint. Validate pagination and filters, and avoid exposing password hashes or secrets.
+
+8. USER INTERFACE
+Use a responsive, full-screen application layout with a header, navigation sidebar, filter area, work grid, and details panel or modal. Suggested navigation: Dashboard, Work Assignment, Work Grid, Employees, Product Groups, Products, Reports, Users, Settings.
+Provide loading indicators, validation messages, empty states, confirmation before destructive actions, and clear status labels. Make the layout usable on typical office monitors and smaller laptop screens.
+
+9. INSTALLATION PREREQUISITES
+Install a supported Node.js LTS release, npm, SQL Server, and SQL Server Management Studio (SSMS). Install Git if source control is used. Verify that the selected SQL Server driver supports the chosen Node.js version and SQL Server configuration.
+
+10. DATABASE SETUP
+Create the WorkDoneDB database in SQL Server. Run reviewed schema scripts in a development database first. Create a dedicated SQL login or use an approved Windows-integrated authentication approach. Grant only required database permissions. Configure backups and test restore procedures. Do not use a production administrator account for routine application connections.
+
+11. CONFIGURATION
+Store server configuration and database credentials in environment variables, not in frontend source code. Example variable names:
+PORT=3000
+NODE_ENV=development
+DB_SERVER=YOUR_SQL_SERVER
+DB_DATABASE=WorkDoneDB
+DB_USER=YOUR_APP_LOGIN
+DB_PASSWORD=YOUR_SECRET
+DB_ENCRYPT=true
+DB_TRUST_SERVER_CERTIFICATE=false
+AUTH_SECRET=REPLACE_WITH_A_LONG_RANDOM_SECRET
+
+These are illustrative names; use the actual variable names supported by your code and database driver. Keep .env out of Git. In production, use a protected secrets mechanism. Do not disable certificate verification in production to bypass TLS errors.
+
+12. RUNNING THE APPLICATION
+Open a terminal in the backend folder, install the dependencies specified by package.json, configure the environment, and run the development script defined in package.json. Repeat for the frontend. Use the repository's existing scripts rather than assuming specific script names. Confirm the backend health endpoint, database connectivity, and frontend API URL. For production, build the frontend and serve it through a configured web server or deployment service.
+
+13. ADMIN ACCOUNT
+Create the initial administrator using a controlled setup script or documented bootstrap process. Hash passwords with a recognized password-hashing library such as Argon2id or bcrypt. Never store plain-text passwords or hardcode an administrator password in source code. Require the initial password to be changed where appropriate and disable public self-registration unless explicitly required.
+
+14. OFFICE LAN DEPLOYMENT
+Choose one office server or dedicated PC for the backend and database. Assign it a stable internal IP address or DHCP reservation. Configure SQL Server and backend network access only for trusted office networks. Allow only the necessary firewall ports and restrict SQL Server access to the backend host where feasible. Other computers should access the frontend using the server's internal hostname or address. Do not expose SQL Server directly to the public internet. Use HTTPS even internally where practical, and restrict server access to authorized staff.
+
+15. WORKFLOW
+Admin creates employee accounts and product masters.
+Manager creates a work item and selects a product or product group where relevant.
+Manager assigns one or more employees and specifies priority and due date.
+Assigned employees open their work list and update progress or add notes.
+The system records status history and the user who made each change.
+Manager reviews completed work and closes it according to business rules.
+Reports summarize pending, overdue, in-progress, and completed work.
+
+16. TESTING CHECKLIST
+Test valid and invalid login attempts.
+Test that inactive users cannot log in.
+Verify role permissions using direct API requests, not only the UI.
+Create, edit, and deactivate employee and product records.
+Assign work to one employee and multiple employees.
+Prevent duplicate assignments.
+Test status transitions and status history.
+Test filters together, date boundaries, sorting, pagination, and empty results.
+Test concurrent updates from different office computers.
+Verify database failures produce safe error messages without leaking credentials.
+Test backups and restoration in a separate environment.
+Test network interruptions and recovery.
+
+17. SECURITY
+Use password hashing, secure sessions or correctly configured tokens, authorization middleware, input validation, parameterized SQL, rate limiting for login, and safe error handling. Protect against SQL injection, cross-site scripting, cross-site request forgery where relevant, and unauthorized access to other employees' records. Configure secure cookies when using cookie-based sessions. Keep dependencies patched and log security-relevant events without recording passwords or tokens. Define retention and access policies for audit logs.
+
+18. BACKUP AND MAINTENANCE
+Schedule database backups appropriate to the business's recovery requirements. Store a protected copy away from the database server. Regularly test restoration. Monitor application errors, database capacity, disk space, and failed logins. Document who is responsible for updates and recovery. Use migrations or versioned SQL scripts for schema changes.
+
+19. FUTURE ONLINE MIGRATION
+Keep frontend and backend separated, use environment-based configuration, and avoid hardcoding local IP addresses. For internet deployment, choose a secured hosting environment, configure a domain and HTTPS, restrict database network access, store secrets securely, configure automated backups and monitoring, and implement appropriate access controls. Consider VPN access for staff if the app is intended to remain private. Test data migration and rollback before moving production data. Do not simply expose the office SQL Server to the internet.
+
+20. IMPLEMENTATION PHASES
+Phase 1: Confirm requirements, workflows, status rules, and user permissions.
+Phase 2: Create database schema and seed development data.
+Phase 3: Implement authentication and role permissions.
+Phase 4: Implement employee, product group, and product masters.
+Phase 5: Implement work assignment and multiple-employee mapping.
+Phase 6: Implement status history, work grid, filters, and reports.
+Phase 7: Test on multiple LAN computers and fix issues.
+Phase 8: Configure backups, monitoring, deployment, and user training.
+Phase 9: Plan online migration if required.
+
+21. IMPORTANT LIMITATIONS
+This document describes a recommended design and implementation process. It does not certify that a particular starter ZIP or repository is complete, compiles successfully, or has been tested against your SQL Server. Verify the actual source code, configuration, database scripts, and API endpoints before deploying. Confirm business-specific rules such as who can close work, whether employees can reassign work, and how reopened tasks should be handled.
+
+END OF DOCUMENTATION
