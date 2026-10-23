@@ -1,0 +1,17 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm ci --prefix backend && npm ci --prefix frontend",
+  "buildCommand": "npm run build --prefix backend && npm run build --prefix frontend",
+  "outputDirectory": "frontend/dist",
+  "functions": {
+    "api/index.mjs": {
+      "maxDuration": 60,
+      "includeFiles": "database/*.sql"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api/index.mjs" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ],
+  "crons": [{ "path": "/api/cron/daily", "schedule": "30 2 * * *" }]
+}

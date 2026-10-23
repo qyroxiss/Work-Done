@@ -55,6 +55,8 @@ async function stream(c) {
   return { status: res.status, type: res.headers.get('content-type'), events, close: () => controller.abort() };
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// Time for a live event to arrive: instant on a server; up to 2 s on serverless hosting (LIVE_WAIT_MS=2500)
+const LIVE_WAIT = Number(process.env.LIVE_WAIT_MS ?? 400);
 
 async function login(u, p, clientId = CLIENT) {
   const c = client();
@@ -80,7 +82,7 @@ check('event stream opens', managerLive.status === 200 && /text\/event-stream/.t
 r = await priya('POST', `/chat/conversations/${everyone.conversationId}/messages`, { body: '  Hello team  ' });
 check('employee posts to Everyone', r.status === 201 && r.data.body === 'Hello team', r.data);
 const firstId = r.data.messageId;
-await wait(400);
+await wait(LIVE_WAIT);
 check('manager receives it live', managerLive.events.some((e) => e.event === 'message' && e.data.messageId === firstId), managerLive.events);
 r = await manager('GET', '/chat/unread');
 check('manager has 1 unread', r.data.unread === 1, r.data);
@@ -119,7 +121,7 @@ const adminLive = await stream(admin);
 r = await manager('POST', `/chat/conversations/${direct.conversationId}/messages`, { body: 'Please check WD-000001' });
 check('manager sends direct message', r.status === 201, r.data);
 const directId = r.data.messageId;
-await wait(400);
+await wait(LIVE_WAIT);
 check('priya receives it live', priyaLive.events.some((e) => e.data.messageId === directId), priyaLive.events);
 check('admin does not receive the direct message', !adminLive.events.some((e) => e.data.messageId === directId), adminLive.events);
 r = await priya('GET', '/chat/conversations');
@@ -147,7 +149,7 @@ check('group needs members', r.status === 400, r.data);
 r = await manager('POST', '/chat/groups', { title: 'Accounts team', memberIds: [priyaUser.userId] });
 const group = r.data;
 check('create group', r.status === 201 && group.kind === 'Group' && group.title === 'Accounts team' && group.memberCount === 2, r.data);
-await wait(400);
+await wait(LIVE_WAIT);
 check('member is told about the new group live', priyaLive.events.some((e) => e.event === 'conversation' && e.data.conversationId === group.conversationId), priyaLive.events);
 r = await priya('GET', '/chat/conversations');
 check('group listed for member', r.data.items.some((c) => c.conversationId === group.conversationId), r.data);
@@ -222,7 +224,7 @@ r = await manager('PATCH', `/chat/messages/${typo.messageId}`, { body: 'not mine
 check("cannot edit someone else's message", r.status === 403, r.data);
 r = await priya('PATCH', `/chat/messages/${typo.messageId}`, { body: 'typo fixed' });
 check('edit own message', r.status === 200 && r.data.body === 'typo fixed' && r.data.editedAt, r.data);
-await wait(400);
+await wait(LIVE_WAIT);
 check('edit is pushed live', managerLive.events.some((e) => e.event === 'message-updated' && e.data.body === 'typo fixed'), managerLive.events);
 r = await manager('DELETE', `/chat/messages/${typo.messageId}`);
 check("non-admin cannot delete someone else's message", r.status === 403, r.data);
@@ -265,7 +267,7 @@ if (OTHER_CLIENT) {
   check('other company people list has none of these users', !r.data.items.some((u) => ['manager1', 'priya'].includes(u.username)), r.data);
   const otherLive = await stream(other);
   await priya('POST', `/chat/conversations/${everyone.conversationId}/messages`, { body: 'only for us' });
-  await wait(400);
+  await wait(LIVE_WAIT);
   check('Everyone message does not reach the other company live', !otherLive.events.some((e) => e.data.body === 'only for us'), otherLive.events);
   otherLive.close();
 }

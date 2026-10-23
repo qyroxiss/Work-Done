@@ -71,6 +71,8 @@ setupRoutes.get('/status', async (req, res) => {
     onServerComputer: isLocalRequest(req),
     // Another computer may continue by entering the setup key
     setupKeyEnabled: Boolean(config.setupKey),
+    // File size limits, so the browser can say so before uploading
+    uploadLimits: config.uploads,
     dbError: dbError && allowed ? dbError : undefined,
     // Machine details only for whoever may run setup, and only while setting up
     environment: step !== 'done' && allowed ? setup.getEnvironmentInfo() : undefined,

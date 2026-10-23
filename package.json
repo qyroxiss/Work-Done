@@ -1,0 +1,9 @@
+{
+  "name": "q-workdone",
+  "private": true,
+  "description": "Q-WorkDone: the Vercel function in api/ runs the backend; see vercel.json",
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  }
+}

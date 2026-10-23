@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from 'react';
-import { api, errorMessage } from './services/api';
+import { api, errorMessage, uploadLimits } from './services/api';
 import type { SetupStatus } from './pages/SetupWizard';
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { Button } from '@mantine/core';
@@ -104,7 +104,8 @@ function SetupGate({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const s = await api.get<SetupStatus>('/setup/status');
+    const s = await api.get<SetupStatus & { uploadLimits?: typeof uploadLimits }>('/setup/status');
+    if (s.uploadLimits) Object.assign(uploadLimits, s.uploadLimits);
     setStatus(s);
     return s;
   }, []);

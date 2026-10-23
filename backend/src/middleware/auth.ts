@@ -1,5 +1,6 @@
 import type { CookieOptions, RequestHandler } from 'express';
 import { config } from '../config/env.js';
+import { ensureClientSchemaOnce } from '../database/migrate.js';
 import { runInDatabase } from '../database/pool.js';
 import { getSessionUser, parseSessionCookie } from '../services/auth.service.js';
 import { findClient } from '../services/clients.service.js';
@@ -31,7 +32,9 @@ export const authenticate: RequestHandler = async (req, res, next) => {
     throw new HttpError(401, 'Your session has expired. Please log in again.', 'UNAUTHENTICATED');
   }
 
-  // Everything after this point (including the route handler) uses the client's database
+  // Tables are current (new instances on serverless hosting check once per company)
+  await ensureClientSchemaOnce(client.schemaName);
+  // Everything after this point (including the route handler) uses the client's schema
   await runInDatabase(client.schemaName, async () => {
     const user = await getSessionUser(session.token, client);
     if (!user) {

@@ -137,5 +137,5 @@ export async function search(req: Request, res: Response) {
 /** Live event stream (Server-Sent Events) for messages, edits, read updates and group changes. */
 export function events(req: Request, res: Response) {
   const user = currentUser(req);
-  subscribe(user.clientId, user.userId, res);
+  subscribe(user.clientId, user.userId, res, req.get('last-event-id'));
 }

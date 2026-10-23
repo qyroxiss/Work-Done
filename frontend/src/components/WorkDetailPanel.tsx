@@ -5,14 +5,12 @@ import { ArrowRight, Check, FileText, Image as ImageIcon, Paperclip, Pencil, Rep
 import { useAuth } from '../hooks/useAuth';
 import { useConfirm } from '../hooks/useConfirm';
 import { useToast } from '../hooks/useToast';
-import { api, ApiError, errorMessage } from '../services/api';
+import { api, ApiError, errorMessage, megabytes, uploadLimits } from '../services/api';
 import type { HistoryEntry, MentionableUser, WorkAttachment, WorkDetail, WorkStatus } from '../types';
 import { formatDate, formatDateTime, relativeTime } from '../utils/format';
 import { DueChip, ErrorBanner, PersonAvatar, PriorityMark, Spinner, STATUS_DOT, StatusBadge } from './common';
 import { MentionInput, withMentions } from './MentionInput';
 import { Modal } from './Modal';
-
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 export function fileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -62,8 +60,8 @@ export function WorkDetailPanel({ workId, onClose, onChanged }: Props) {
     setUploading(true);
     try {
       for (const file of files) {
-        if (file.size > MAX_FILE_BYTES) {
-          toast.error(`${file.name} is larger than 20 MB.`);
+        if (file.size > uploadLimits.workFileBytes) {
+          toast.error(`${file.name} is larger than ${megabytes(uploadLimits.workFileBytes)}.`);
           continue;
         }
         setWork(await api.upload<WorkDetail>(`/work-items/${work.workId}/attachments`, file));
@@ -316,7 +314,7 @@ export function WorkDetailPanel({ workId, onClose, onChanged }: Props) {
                   )}
                 </Group>
                 {work.attachments.length === 0 ? (
-                  <Text c="dimmed">{work.canAttach ? 'No files yet. Drop files here or use “Add file” (up to 20 MB each).' : 'No files.'}</Text>
+                  <Text c="dimmed">{work.canAttach ? `No files yet. Drop files here or use “Add file” (up to ${megabytes(uploadLimits.workFileBytes)} each).` : 'No files.'}</Text>
                 ) : (
                   <Stack gap={6}>
                     {work.attachments.map((f) => (

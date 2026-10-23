@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -5,7 +6,9 @@ import cookieParser from 'cookie-parser';
 import express from 'express';
 import helmet from 'helmet';
 import { config, isConfigured } from './config/env.js';
+import { migrateAll } from './database/migrate.js';
 import { query } from './database/pool.js';
+import { runJobsOnce } from './services/jobs.js';
 import { csrfGuard } from './middleware/csrf.js';
 import { apiNotFound, errorHandler } from './middleware/errorHandler.js';
 import { requestLogger } from './middleware/requestLogger.js';
@@ -54,6 +57,23 @@ export function createApp() {
     } catch {
       res.status(503).json({ status: 'degraded', database: 'unavailable', time: new Date().toISOString() });
     }
+  });
+
+  // Daily background work for serverless hosting (Vercel Cron sends "Authorization: Bearer <CRON_SECRET>")
+  app.get('/api/cron/daily', async (req, res) => {
+    const expected = config.cronSecret ? `Bearer ${config.cronSecret}` : null;
+    const given = req.get('authorization') ?? '';
+    const ok =
+      expected !== null &&
+      given.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
+    if (!ok) {
+      res.status(401).json({ error: 'Not allowed.', code: 'UNAUTHENTICATED' });
+      return;
+    }
+    const upgraded = await migrateAll();
+    const clients = await runJobsOnce({ cleanUp: true });
+    res.json({ ok: true, upgraded, clients });
   });
 
   app.use('/api/setup', setupRoutes);

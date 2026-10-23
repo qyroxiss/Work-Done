@@ -6,9 +6,26 @@ import { readSqlFile } from './sqlFiles.js';
  * version each company schema has, so start-up only runs it when this build is newer.
  * Raise SCHEMA_VERSION whenever client.sql changes (add new columns with ADD COLUMN IF NOT EXISTS).
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2; // 2: LiveEvents
 
 let mainReady: Promise<void> | null = null;
+const clientReady = new Map<string, Promise<boolean>>();
+
+/**
+ * Upgrades a company's schema at most once per process. On a long-running server start-up already did
+ * this; on serverless hosting each new instance checks on the company's first request.
+ */
+export function ensureClientSchemaOnce(schema: string): Promise<boolean> {
+  let ready = clientReady.get(schema);
+  if (!ready) {
+    ready = ensureClientSchema(schema).catch((err) => {
+      clientReady.delete(schema); // retry on the next request
+      throw err;
+    });
+    clientReady.set(schema, ready);
+  }
+  return ready;
+}
 
 /** Shared tables (client registry, versions). Runs once per process. */
 export function ensureMainSchema(): Promise<void> {

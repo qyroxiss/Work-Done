@@ -18,11 +18,10 @@ import { useAuth } from '../hooks/useAuth';
 import { useChat } from '../hooks/useChat';
 import { useConfirm } from '../hooks/useConfirm';
 import { useDebounce } from '../hooks/useDebounce';
-import { api, errorMessage } from '../services/api';
+import { api, errorMessage, megabytes, uploadLimits } from '../services/api';
 import type { ChatConversation, ChatMember, ChatMessage, ChatSearchResult, ChatUser } from '../types';
 import './chat.css';
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const INLINE_IMAGES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
 
 // ---------------------------------------------------------------- helpers
@@ -292,8 +291,8 @@ export function ChatPage() {
 
   const chooseFile = (f: File | undefined | null) => {
     if (!f) return;
-    if (f.size > MAX_FILE_BYTES) {
-      setThreadError('Files can be at most 10 MB.');
+    if (f.size > uploadLimits.chatFileBytes) {
+      setThreadError(`Files can be at most ${megabytes(uploadLimits.chatFileBytes)}.`);
       return;
     }
     setThreadError(null);
@@ -598,7 +597,7 @@ export function ChatPage() {
                   e.target.value = '';
                 }}
               />
-              <Tooltip label="Attach a file (max 10 MB)">
+              <Tooltip label={`Attach a file (max ${megabytes(uploadLimits.chatFileBytes)})`}>
                 <ActionIcon
                   size={44}
                   radius={14}

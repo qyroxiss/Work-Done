@@ -7,6 +7,7 @@ import * as recurring from '../controllers/recurring.controller.js';
 import * as reports from '../controllers/reports.controller.js';
 import * as users from '../controllers/users.controller.js';
 import * as work from '../controllers/workItems.controller.js';
+import { config } from '../config/env.js';
 import { authenticate, currentUser, requireRole } from '../middleware/auth.js';
 import { logSecurityEvent } from '../services/audit.service.js';
 import { getClient, updateClient } from '../services/clients.service.js';
@@ -53,7 +54,8 @@ apiRoutes.post('/work-items/:id/notes', work.addNote);
 apiRoutes.get('/work-items/:id/mentionable', work.mentionable);
 
 // Files on work items (access checked inside the service, like the work item itself)
-const workUpload = express.raw({ type: 'application/octet-stream', limit: '20mb' });
+// A little above the limit, so a slightly larger file gets the friendly "at most N MB" message
+const workUpload = express.raw({ type: 'application/octet-stream', limit: config.uploads.workFileBytes + 1024 * 1024 });
 apiRoutes.post('/work-items/:id/attachments', workUpload, work.upload);
 apiRoutes.get('/work-attachments/:id', work.download);
 apiRoutes.delete('/work-attachments/:id', work.removeAttachment);
@@ -95,7 +97,7 @@ apiRoutes.put('/settings/company', adminOnly, async (req, res) => {
 });
 
 // Chat between users of the same company (access checked inside the service)
-const chatUpload = express.raw({ type: 'application/octet-stream', limit: '10mb' });
+const chatUpload = express.raw({ type: 'application/octet-stream', limit: config.uploads.chatFileBytes + 1024 * 1024 });
 apiRoutes.get('/chat/users', chat.users);
 apiRoutes.get('/chat/conversations', chat.conversations);
 apiRoutes.get('/chat/conversations/:id', chat.conversation);

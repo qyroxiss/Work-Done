@@ -1,3 +1,4 @@
+import { config } from '../config/env.js';
 import { query, sql, withTransaction, type Params, type Row } from '../database/pool.js';
 import type { AuthUser, Role } from '../types/domain.js';
 import { toIso } from '../utils/dates.js';
@@ -17,9 +18,10 @@ export type ConversationKind = 'Company' | 'Direct' | 'Group';
 /** DirectKey of the company-wide conversation (unique index guarantees there is only one) */
 const COMPANY_KEY = '*';
 
-export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-/** Work files are often scanned documents, so they may be larger than chat files */
-export const MAX_WORK_FILE_BYTES = 20 * 1024 * 1024;
+/** Chat file limit: 10 MB, or 4 MB on serverless hosting (see config.uploads) */
+export const MAX_ATTACHMENT_BYTES = config.uploads.chatFileBytes;
+/** Work files are often scanned documents, so they may be larger than chat files (20 MB on a server) */
+export const MAX_WORK_FILE_BYTES = config.uploads.workFileBytes;
 /** Program files that could harm a computer when opened */
 const BLOCKED_EXTENSIONS = /\.(exe|msi|bat|cmd|com|scr|pif|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|cpl|jar|reg|lnk|dll|sys)$/i;
 /** Only these are shown inline; everything else is always downloaded */

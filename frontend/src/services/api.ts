@@ -26,6 +26,13 @@ interface RawBody {
   headers: Record<string, string>;
 }
 
+/** Largest files the server accepts (set from /setup/status at start-up; smaller on serverless hosting). */
+export const uploadLimits = { workFileBytes: 20 * 1024 * 1024, chatFileBytes: 10 * 1024 * 1024 };
+
+export function megabytes(bytes: number): string {
+  return `${Math.round(bytes / 1024 / 1024)} MB`;
+}
+
 const SETUP_KEY_STORAGE = 'wd-setup-key';
 
 /** Setup key entered on this tab (lets setup run from a computer other than the server). */

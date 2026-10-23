@@ -36,6 +36,8 @@ Afterwards just double-click `WorkDone.bat` to start (or it starts by itself at 
 
 `WorkDone.bat -Rebuild` forces a fresh build after code changes.
 
+**On Vercel:** import the GitHub repository into Vercel, add a Neon database and three environment variables — step by step in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#vercel--neon).
+
 **Setup from another computer (cloud hosting):** set `SETUP_KEY` to a long random value in the server's environment. The setup wizard and the client page then ask for this key on any other computer.
 
 ## Multiple client companies

@@ -1,7 +1,41 @@
 # Deployment
 
 Q-WorkDone is one Node.js server (it serves the built UI and the API on one port) and a PostgreSQL database.
-It can run on an office server on the LAN, or on a cloud host with a hosted database (for example Neon).
+It can run on an office server on the LAN, on Vercel with a Neon database (see **Vercel** below), or on any other
+cloud host with a hosted database.
+
+## Vercel + Neon
+
+The repository is ready for Vercel: `vercel.json` builds both parts, serves the UI from `frontend/dist`, and runs the
+API as one function (`api/index.mjs`). On Vercel the app switches to its serverless mode by itself:
+
+| | Office server | Vercel |
+|---|---|---|
+| Live chat and notifications | pushed instantly | through the database, within about 2 seconds |
+| Repeating work, due/overdue reminders | every 15 minutes | once a day at 08:00 IST (Vercel Cron, `30 2 * * *` UTC) |
+| Largest file (work / chat) | 20 MB / 10 MB | 4 MB / 4 MB (Vercel's request limit is 4.5 MB) |
+| Setup and `/clients` | on the server computer | anywhere, with the `SETUP_KEY` |
+
+Steps:
+
+1. **Push** the code to GitHub.
+2. In Vercel: **Add New → Project**, import the repository. Leave the framework preset as *Other* and the root
+   directory as the repository root (the commands come from `vercel.json`).
+3. **Database:** in the project, *Storage → Create Database → Neon* (or connect an existing Neon project). This adds
+   `DATABASE_URL` to the project's environment variables. Choose a region close to your users (e.g. Singapore/Mumbai for India)
+   and set the Vercel function region to match (*Settings → Functions → Function Region*).
+4. **Environment variables** (*Settings → Environment Variables*, Production):
+   - `NODE_ENV` = `production`
+   - `SETUP_KEY` = a long random value (lets you run setup and manage client companies in the browser)
+   - `CRON_SECRET` = another long random value (protects the daily job; Vercel Cron sends it automatically)
+5. **Deploy**, open the site, enter the setup key, and create your company and administrator.
+   To bring existing data instead, run on your computer (in `backend`):
+   `$env:DATABASE_URL = '<Neon connection string>'; npm run import:sqlserver` (from the SQL Server version), or restore a
+   PostgreSQL dump into the Neon database with `pg_restore`.
+6. Optional: add your own domain under *Settings → Domains*.
+
+Every push to the main branch deploys again; other branches get preview deployments. Neon's free plan sleeps
+when idle, so the first request after a quiet period can take a second or two.
 
 ## 1. Database (PostgreSQL 14 or newer)
 

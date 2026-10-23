@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { config } from '../config/env.js';
+import { ensureClientSchemaOnce } from '../database/migrate.js';
 import { query, runInDatabase, sql } from '../database/pool.js';
 import type { AuthUser, Role } from '../types/domain.js';
 import { HttpError } from '../utils/httpError.js';
@@ -59,6 +60,7 @@ export async function login(
     });
     throw new HttpError(401, INVALID_LOGIN_MESSAGE, 'INVALID_CREDENTIALS');
   }
+  await ensureClientSchemaOnce(client.schemaName);
   return runInDatabase(client.schemaName, async () => {
     const result = await loginToClient(client, identifier, password, meta);
     return { ...result, client };
