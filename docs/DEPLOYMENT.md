@@ -6,8 +6,14 @@ cloud host with a hosted database.
 
 ## Vercel + Neon
 
-The repository is ready for Vercel: `vercel.json` builds both parts, serves the UI from `frontend/dist`, and runs the
-API as one function (`api/index.mjs`). On Vercel the app switches to its serverless mode by itself:
+The repository is ready for Vercel as one project with two **services** (`vercel.json`):
+
+- `frontend` (`frontend/`, Vite): public at `/`; app pages such as `/work` fall back to `index.html`.
+- `backend` (`backend/`, Express): public at `/api/*`; Vercel serves the default export of `backend/src/app.ts`
+  as one function, which sees the full path (`/api/...`).
+
+The browser calls `/api` on the same domain, so the services do not call each other (no bindings).
+On Vercel the app switches to its serverless mode by itself:
 
 | | Office server | Vercel |
 |---|---|---|
@@ -19,8 +25,8 @@ API as one function (`api/index.mjs`). On Vercel the app switches to its serverl
 Steps:
 
 1. **Push** the code to GitHub.
-2. In Vercel: **Add New → Project**, import the repository. Leave the framework preset as *Other* and the root
-   directory as the repository root (the commands come from `vercel.json`).
+2. In Vercel: **Add New → Project**, import the repository. Keep the root directory as the repository root; Vercel
+   reads the services from `vercel.json` and builds each one. Try it locally first with `vercel dev`.
 3. **Database:** in the project, *Storage → Create Database → Neon* (or connect an existing Neon project). This adds
    `DATABASE_URL` to the project's environment variables. Choose a region close to your users (e.g. Singapore/Mumbai for India)
    and set the Vercel function region to match (*Settings → Functions → Function Region*).
@@ -140,7 +146,7 @@ HTTPS also lets office PCs **install Q-WorkDone as an app** (Chrome/Edge: the in
 - Monitor: application logs, `/api/health`, database size, failed logins (`SecurityEvents` in each client schema, `EventType = 'LOGIN_FAILED'`).
 - Sessions older than 7 days after expiry are purged automatically. Define a retention period for `SecurityEvents` (e.g. delete rows older than 1 year).
 - Keep Node.js, npm dependencies (`npm audit`), the operating system and PostgreSQL patched.
-- Schema changes: edit `database/client.sql` idempotently (`CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and raise
+- Schema changes: edit `backend/database/client.sql` idempotently (`CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and raise
   `SCHEMA_VERSION` in `backend/src/database/migrate.ts`; every company is upgraded at the next start. Test on a copy first, back up before deploying.
 
 ### Useful security queries

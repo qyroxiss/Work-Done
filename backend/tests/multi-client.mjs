@@ -10,6 +10,8 @@ let failed = 0;
 function client() {
   const c = async function call(method, path, body) {
     const headers = { Accept: 'application/json', 'X-Requested-With': 'WorkDone' };
+    // Hosted (e.g. Vercel): client management needs the setup key
+    if (process.env.SETUP_KEY) headers['X-Setup-Key'] = process.env.SETUP_KEY;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (c.cookie) headers.Cookie = c.cookie;
     const res = await fetch(BASE + '/api' + path, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });

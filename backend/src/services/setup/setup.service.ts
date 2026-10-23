@@ -18,7 +18,7 @@ import { run } from './processUtil.js';
  *   database -> the app has no DATABASE_URL yet (or cannot sign in with it)
  *   admin    -> connected, but no company exists yet: create the first company and its administrator
  *   done
- * Tables are created by the app itself (database/main.sql and client.sql), so no database
+ * Tables are created by the app itself (backend/database/main.sql and client.sql), so no database
  * administrator steps are needed.
  */
 export type SetupStep = 'database' | 'admin' | 'done';

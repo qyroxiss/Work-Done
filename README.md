@@ -5,14 +5,14 @@ One installation can host **several client companies**: users sign in with a **C
 
 - **Frontend:** React + TypeScript (Vite) with Mantine UI — `frontend/`
 - **Backend:** Node.js + Express 5 + TypeScript — `backend/`
-- **Database:** PostgreSQL 14 or newer (on the same computer, on the network, or hosted such as Neon) — scripts in `database/`
+- **Database:** PostgreSQL 14 or newer (on the same computer, on the network, or hosted such as Neon) — scripts in `backend/database/`
 - **Auth:** server-side sessions (httpOnly cookie, SHA-256 hashed tokens in DB), bcrypt password hashing, role-based authorization enforced by the API
 
 ```
 WorkDone-Management/
   backend/     Express API (routes → controllers → services → SQL)
   frontend/    React single-page app
-  database/    main.sql (client registry), client.sql (tables of one company), seed.sql (sample data)
+               backend/database: main.sql (client registry), client.sql (tables of one company), seed.sql (sample data)
   scripts/     start.ps1 (launcher), server-tools.ps1 (firewall / auto-start), dev-postgres.ps1
   docs/        DEPLOYMENT.md (install, backups), API.md, TESTING.md
   WorkDone.bat double-click to install, set up and start

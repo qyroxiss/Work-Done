@@ -2,7 +2,7 @@ import { assertSchemaName, getPool, MAIN_SCHEMA } from './pool.js';
 import { readSqlFile } from './sqlFiles.js';
 
 /**
- * Creates and upgrades the tables. database/client.sql is idempotent; SCHEMA_VERSION records which
+ * Creates and upgrades the tables. backend/database/client.sql is idempotent; SCHEMA_VERSION records which
  * version each company schema has, so start-up only runs it when this build is newer.
  * Raise SCHEMA_VERSION whenever client.sql changes (add new columns with ADD COLUMN IF NOT EXISTS).
  */

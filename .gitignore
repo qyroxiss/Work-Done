@@ -7,3 +7,6 @@ dist/
 certs/
 .vscode/
 .DS_Store
+
+# Vercel CLI link and local dev state
+.vercel/

@@ -93,3 +93,9 @@ export function createApp() {
   app.use(errorHandler);
   return app;
 }
+
+/**
+ * Vercel's Express builder picks this file (src/app.ts imports express) and serves its default export.
+ * The office server (server.ts) calls createApp() itself; creating the app has no side effects.
+ */
+export default createApp();
