@@ -1,4 +1,4 @@
-import { query, recordsets, sql, withTransaction, type Params, type Row } from '../database/pool.js';
+import { query, recordsets, sql, withTransaction, type Params, type Row, type Tx } from '../database/pool.js';
 import type { AuthUser, Paged, Priority } from '../types/domain.js';
 import { parseDateOnly, toDateOnly, toIso, todayLocal } from '../utils/dates.js';
 import { badRequest, notFound } from '../utils/httpError.js';
@@ -85,7 +85,7 @@ export async function listRecurring(q: RecurringListQuery): Promise<Paged<Recurr
   const where: string[] = [];
   const params: Params = {};
   if (q.search) {
-    where.push('(r.Title LIKE @search OR r.Description LIKE @search)');
+    where.push('(r.Title ILIKE @search OR r.Description ILIKE @search)');
     params.search = likeParam(q.search);
   }
   if (q.isActive !== undefined) {
@@ -110,7 +110,7 @@ export async function getRecurring(id: number): Promise<RecurringTemplate> {
   return (await attachAssignees([mapTemplate(r.recordset[0])]))[0];
 }
 
-async function checkEmployees(employeeIds: number[], tx: Parameters<typeof query>[2]) {
+async function checkEmployees(employeeIds: number[], tx: Tx) {
   if (employeeIds.length === 0) return;
   const params: Params = {};
   const list = inList(params, 'e', employeeIds, sql.Int);
@@ -135,7 +135,7 @@ function templateParams(data: RecurringInput, groupId: number | null): Params {
   };
 }
 
-async function saveAssignees(tx: Parameters<typeof query>[2], recurringId: number, employeeIds: number[]) {
+async function saveAssignees(tx: Tx, recurringId: number, employeeIds: number[]) {
   await query(`DELETE FROM dbo.RecurringWorkAssignees WHERE RecurringId = @id`, { id: [sql.Int, recurringId] }, tx);
   for (const employeeId of employeeIds) {
     await query(`INSERT INTO dbo.RecurringWorkAssignees (RecurringId, EmployeeId) VALUES (@id, @emp)`, {
@@ -152,8 +152,8 @@ export async function createRecurring(data: RecurringInput, user: AuthUser) {
     await checkEmployees(data.employeeIds, tx);
     const r = await query(
       `INSERT INTO dbo.RecurringWork (Title, Description, ProductGroupId, ProductId, Priority, Frequency, AnchorDay, NextDueDate, LeadDays, EndDate, IsActive, CreatedByUserId)
-       OUTPUT INSERTED.RecurringId
-       VALUES (@title, @description, @groupId, @productId, @priority, @frequency, @anchor, @nextDue, @leadDays, @endDate, @active, @userId)`,
+       VALUES (@title, @description, @groupId, @productId, @priority, @frequency, @anchor, @nextDue, @leadDays, @endDate, @active, @userId)
+       RETURNING RecurringId`,
       { ...templateParams(data, groupId), anchor: [sql.TinyInt, anchorDayOf(data.nextDueDate)], userId: [sql.Int, user.userId] },
       tx,
     );
@@ -167,7 +167,7 @@ export async function createRecurring(data: RecurringInput, user: AuthUser) {
 
 export async function updateRecurring(id: number, data: RecurringInput, user: AuthUser) {
   await withTransaction(async (tx) => {
-    const r = await query(`SELECT NextDueDate, AnchorDay, ProductId, ProductGroupId FROM dbo.RecurringWork WITH (UPDLOCK) WHERE RecurringId = @id`, {
+    const r = await query(`SELECT NextDueDate, AnchorDay, ProductId, ProductGroupId FROM dbo.RecurringWork WHERE RecurringId = @id FOR UPDATE`, {
       id: [sql.Int, id],
     }, tx);
     const current = r.recordset[0];
@@ -183,7 +183,7 @@ export async function updateRecurring(id: number, data: RecurringInput, user: Au
       `UPDATE dbo.RecurringWork
        SET Title = @title, Description = @description, ProductGroupId = @groupId, ProductId = @productId, Priority = @priority,
            Frequency = @frequency, AnchorDay = @anchor, NextDueDate = @nextDue, LeadDays = @leadDays, EndDate = @endDate,
-           IsActive = @active, UpdatedAt = SYSUTCDATETIME()
+           IsActive = @active, UpdatedAt = now()
        WHERE RecurringId = @id`,
       {
         ...templateParams(data, groupId),
@@ -208,7 +208,8 @@ export async function runTemplate(clientId: string, recurringId: number): Promis
     const r = await query(
       `SELECT RecurringId, Title, Description, ProductGroupId, ProductId, Priority, Frequency, AnchorDay, NextDueDate,
               LeadDays, EndDate, CreatedByUserId
-       FROM dbo.RecurringWork WITH (UPDLOCK, ROWLOCK) WHERE RecurringId = @id AND IsActive = 1`,
+       FROM dbo.RecurringWork WHERE RecurringId = @id AND IsActive
+       FOR UPDATE`,
       { id: [sql.Int, recurringId] },
       tx,
     );
@@ -227,7 +228,7 @@ export async function runTemplate(clientId: string, recurringId: number): Promis
     // Only active employees get the new work; inactive ones stay on the template until edited
     const a = await query(
       `SELECT ra.EmployeeId FROM dbo.RecurringWorkAssignees ra
-       JOIN dbo.Employees e ON e.EmployeeId = ra.EmployeeId AND e.IsActive = 1 WHERE ra.RecurringId = @id`,
+       JOIN dbo.Employees e ON e.EmployeeId = ra.EmployeeId AND e.IsActive WHERE ra.RecurringId = @id`,
       { id: [sql.Int, recurringId] },
       tx,
     );
@@ -253,7 +254,7 @@ export async function runTemplate(clientId: string, recurringId: number): Promis
       made.push({ workId, employeeIds: added, title, due });
     }
     await query(
-      `UPDATE dbo.RecurringWork SET NextDueDate = @next, LastCreatedAt = SYSUTCDATETIME() WHERE RecurringId = @id`,
+      `UPDATE dbo.RecurringWork SET NextDueDate = @next, LastCreatedAt = now() WHERE RecurringId = @id`,
       { next: [sql.Date, parseDateOnly(plan.nextDue)], id: [sql.Int, recurringId] },
       tx,
     );
@@ -281,7 +282,7 @@ export async function runDueTemplates(clientId: string): Promise<number> {
   const today = todayLocal();
   const r = await query(
     `SELECT RecurringId FROM dbo.RecurringWork
-     WHERE IsActive = 1 AND DATEADD(DAY, -LeadDays, NextDueDate) <= @today AND (EndDate IS NULL OR NextDueDate <= EndDate)`,
+     WHERE IsActive AND NextDueDate - LeadDays <= @today AND (EndDate IS NULL OR NextDueDate <= EndDate)`,
     { today: [sql.Date, parseDateOnly(today)] },
   );
   let total = 0;

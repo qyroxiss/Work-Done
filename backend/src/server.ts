@@ -3,7 +3,8 @@ import http from 'node:http';
 import https from 'node:https';
 import { createApp } from './app.js';
 import { config, isConfigured } from './config/env.js';
-import { closePool, getPool } from './database/pool.js';
+import { migrateAll } from './database/migrate.js';
+import { closePool } from './database/pool.js';
 import { purgeOldSessionsAllClients } from './services/auth.service.js';
 import { startJobs } from './services/jobs.js';
 
@@ -34,15 +35,16 @@ server.listen(config.port, config.host, () => {
 if (!isConfigured()) {
   console.log(`\n  Setup required: open http://localhost:${config.port} in a browser on this computer.\n`);
 } else {
-  // Verify DB connectivity at startup (the server keeps running and retries on demand if it fails)
-  const db = config.db!;
-  getPool()
-    .then(() => {
-      console.log(`[db] connected to ${db.database} on ${db.server}${db.instanceName ? `\\${db.instanceName}` : ''}`);
-      // Fails harmlessly until setup / the database upgrade has created the client registry
+  // Connect, bring every company's tables up to date, then tidy old sessions.
+  // The server keeps running if this fails (e.g. database not reachable yet) and retries on demand.
+  migrateAll()
+    .then((upgraded) => {
+      const target = new URL(config.db!.url);
+      console.log(`[db] connected to ${target.pathname.slice(1)} on ${target.hostname}`);
+      if (upgraded.length) console.log(`[db] tables created/upgraded for: ${upgraded.join(', ')}`);
       purgeOldSessionsAllClients().catch((err: Error) => console.error('[sessions] cleanup failed:', err.message));
     })
-    .catch((err: Error) => console.error('[db] initial connection failed:', err.message));
+    .catch((err: Error) => console.error('[db] start-up check failed:', err.message));
 }
 
 // Repeating work and due-date reminders (skips itself until setup is complete)

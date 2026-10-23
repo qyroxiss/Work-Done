@@ -44,7 +44,7 @@ export async function listUsers(q: { search?: string; isActive?: boolean; role?:
   const where: string[] = [];
   const params: Params = {};
   if (q.search) {
-    where.push('(u.Username LIKE @s OR u.Email LIKE @s OR e.EmployeeName LIKE @s OR e.EmployeeCode LIKE @s)');
+    where.push('(u.Username ILIKE @s OR u.Email ILIKE @s OR e.EmployeeName ILIKE @s OR e.EmployeeCode ILIKE @s)');
     params.s = likeParam(q.search);
   }
   if (q.isActive !== undefined) {
@@ -76,8 +76,8 @@ export async function createUser(data: CreateUserInput, actor: AuthUser, ip?: st
   await assertEmployeeUsable(data.employeeId);
   const r = await query(
     `INSERT INTO dbo.Users (ClientId, Username, Email, PasswordHash, Role, EmployeeId, MustChangePassword, IsActive)
-     OUTPUT INSERTED.UserId
-     VALUES (@clientId, @username, @email, @hash, @role, @employeeId, @mustChange, @active)`,
+     VALUES (@clientId, @username, @email, @hash, @role, @employeeId, @mustChange, @active)
+     RETURNING UserId`,
     {
       // New users always belong to the same client as the administrator creating them
       clientId: [sql.NVarChar(30), actor.clientId],
@@ -108,7 +108,7 @@ export async function updateUser(id: number, data: UpdateUserInput, actor: AuthU
   await assertEmployeeUsable(data.employeeId, existing.employeeId);
 
   await query(
-    `UPDATE dbo.Users SET Email = @email, Role = @role, EmployeeId = @employeeId, IsActive = @active, UpdatedAt = SYSUTCDATETIME()
+    `UPDATE dbo.Users SET Email = @email, Role = @role, EmployeeId = @employeeId, IsActive = @active, UpdatedAt = now()
      WHERE UserId = @id`,
     {
       email: [sql.NVarChar(150), data.email],
@@ -141,7 +141,7 @@ export async function updateUser(id: number, data: UpdateUserInput, actor: AuthU
 export async function resetPassword(id: number, password: string, actor: AuthUser, ip?: string) {
   const existing = await getUser(id);
   await query(
-    `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = 1, UpdatedAt = SYSUTCDATETIME()
+    `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = true, UpdatedAt = now()
      WHERE UserId = @id`,
     { hash: [sql.NVarChar(255), await hashPassword(password)], id: [sql.Int, id] },
   );

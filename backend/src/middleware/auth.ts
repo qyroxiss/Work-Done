@@ -32,7 +32,7 @@ export const authenticate: RequestHandler = async (req, res, next) => {
   }
 
   // Everything after this point (including the route handler) uses the client's database
-  await runInDatabase(client.databaseName, async () => {
+  await runInDatabase(client.schemaName, async () => {
     const user = await getSessionUser(session.token, client);
     if (!user) {
       res.clearCookie(SESSION_COOKIE, sessionCookieOptions);

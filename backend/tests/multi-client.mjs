@@ -1,6 +1,6 @@
-// Multi-client (one database per Client ID) test. Run on the server computer after smoke.mjs:
+// Multi-client (one schema per Client ID) test. Run on the server computer after smoke.mjs:
 //   node tests/multi-client.mjs http://127.0.0.1:3100 SMOKE
-// Creates the client NEWCO (database WorkDone_NEWCO) using the Windows account (sqlcmd).
+// Creates the client NEWCO (its tables in schema wd_newco).
 const BASE = process.argv[2] ?? 'http://127.0.0.1:3100';
 const FIRST = process.argv[3] ?? 'SMOKE';
 const NEW = 'NEWCO';
@@ -36,7 +36,7 @@ check('invalid Client ID rejected', r.status === 400, r.data);
 r = await local('POST', '/setup/clients', { companyName: 'Dup', clientId: FIRST.toLowerCase(), username: 'admin', password: 'Newco12345' });
 check('existing Client ID -> 409', r.status === 409, r.data);
 r = await local('POST', '/setup/clients', { companyName: 'New Company Ltd', clientId: NEW.toLowerCase(), username: 'admin', password: 'Newco12345' });
-check('create client (own database)', r.status === 201 && r.data.client.databaseName === `WorkDone_${NEW}`, r.data);
+check('create client (own schema)', r.status === 201 && r.data.client.schemaName === `wd_${NEW.toLowerCase()}`, r.data);
 console.log('      ', (r.data?.log ?? []).join(' | '));
 r = await local('GET', '/setup/clients');
 check('both clients listed', r.status === 200 && [FIRST, NEW].every((id) => r.data.items.some((c) => c.clientId === id)), r.data);

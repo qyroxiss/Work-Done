@@ -1,4 +1,4 @@
-import { query, sql, type Params, type Row } from '../database/pool.js';
+import { query, sql, withTransaction, type Params, type Row } from '../database/pool.js';
 import type { AuthUser, Role } from '../types/domain.js';
 import { toIso } from '../utils/dates.js';
 import { badRequest, forbidden, notFound } from '../utils/httpError.js';
@@ -16,7 +16,6 @@ export type ConversationKind = 'Company' | 'Direct' | 'Group';
 
 /** DirectKey of the company-wide conversation (unique index guarantees there is only one) */
 const COMPANY_KEY = '*';
-const DUPLICATE_KEY = '2601, 2627';
 
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 /** Work files are often scanned documents, so they may be larger than chat files */
@@ -98,11 +97,11 @@ const CONVERSATION_SELECT = `
             AND x.SenderUserId <> @me AND x.DeletedAt IS NULL) AS Unread
   FROM dbo.ChatMembers m
   JOIN dbo.ChatConversations c ON c.ConversationId = m.ConversationId
-  LEFT JOIN dbo.ChatMembers o ON c.Kind = N'Direct' AND o.ConversationId = c.ConversationId AND o.UserId <> @me
+  LEFT JOIN dbo.ChatMembers o ON c.Kind = 'Direct' AND o.ConversationId = c.ConversationId AND o.UserId <> @me
   LEFT JOIN dbo.Users ou ON ou.UserId = o.UserId
   LEFT JOIN dbo.Employees oe ON oe.EmployeeId = ou.EmployeeId
-  OUTER APPLY (SELECT TOP 1 MessageId, Body, SenderUserId, CreatedAt, DeletedAt FROM dbo.ChatMessages
-               WHERE ConversationId = c.ConversationId ORDER BY MessageId DESC) lm
+  LEFT JOIN LATERAL (SELECT MessageId, Body, SenderUserId, CreatedAt, DeletedAt FROM dbo.ChatMessages
+                     WHERE ConversationId = c.ConversationId ORDER BY MessageId DESC LIMIT 1) lm ON true
   LEFT JOIN dbo.ChatAttachments la ON la.MessageId = lm.MessageId`;
 
 const MESSAGE_SELECT = `
@@ -116,19 +115,14 @@ const MESSAGE_SELECT = `
 
 /** Creates the company conversation if needed and makes the user a member of it. Returns its id. */
 async function ensureCompanyConversation(actor: AuthUser): Promise<number> {
+  // ON CONFLICT: two requests may try to create the conversation (or membership) at the same moment
   const r = await query(
-    `IF NOT EXISTS (SELECT 1 FROM dbo.ChatConversations WHERE DirectKey = @key)
-       BEGIN TRY
-         INSERT INTO dbo.ChatConversations (Kind, DirectKey) VALUES (N'Company', @key);
-       END TRY
-       BEGIN CATCH IF ERROR_NUMBER() NOT IN (${DUPLICATE_KEY}) THROW; END CATCH;
-     DECLARE @cid INT = (SELECT ConversationId FROM dbo.ChatConversations WHERE DirectKey = @key);
-     IF NOT EXISTS (SELECT 1 FROM dbo.ChatMembers WHERE ConversationId = @cid AND UserId = @me)
-       BEGIN TRY
-         INSERT INTO dbo.ChatMembers (ConversationId, UserId) VALUES (@cid, @me);
-       END TRY
-       BEGIN CATCH IF ERROR_NUMBER() NOT IN (${DUPLICATE_KEY}) THROW; END CATCH;
-     SELECT @cid AS ConversationId;`,
+    `INSERT INTO dbo.ChatConversations (Kind, DirectKey) VALUES ('Company', @key)
+       ON CONFLICT (DirectKey) WHERE DirectKey IS NOT NULL DO NOTHING;
+     INSERT INTO dbo.ChatMembers (ConversationId, UserId)
+       SELECT ConversationId, @me FROM dbo.ChatConversations WHERE DirectKey = @key
+       ON CONFLICT DO NOTHING;
+     SELECT ConversationId FROM dbo.ChatConversations WHERE DirectKey = @key;`,
     { key: [sql.NVarChar(30), COMPANY_KEY], me: [sql.Int, actor.userId] },
   );
   return r.recordset[0].ConversationId as number;
@@ -171,9 +165,9 @@ async function activeUserIds(ids: number[]): Promise<number[]> {
   if (!ids.length) return [];
   const r = await query(
     `SELECT u.UserId FROM dbo.Users u LEFT JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
-     WHERE u.IsActive = 1 AND (u.EmployeeId IS NULL OR e.IsActive = 1)
-       AND u.UserId IN (SELECT CAST(value AS INT) FROM STRING_SPLIT(@ids, N','))`,
-    { ids: [sql.NVarChar(sql.MAX), ids.join(',')] },
+     WHERE u.IsActive AND (u.EmployeeId IS NULL OR e.IsActive)
+       AND u.UserId = ANY(@ids::int[])`,
+    { ids: [sql.Int, ids] },
   );
   return r.recordset.map((u) => u.UserId as number);
 }
@@ -183,8 +177,8 @@ export async function listChatUsers(actor: AuthUser) {
   const r = await query(
     `SELECT u.UserId, u.Username, u.Role, e.EmployeeName
      FROM dbo.Users u LEFT JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
-     WHERE u.IsActive = 1 AND (u.EmployeeId IS NULL OR e.IsActive = 1) AND u.UserId <> @me
-     ORDER BY ISNULL(e.EmployeeName, u.Username)`,
+     WHERE u.IsActive AND (u.EmployeeId IS NULL OR e.IsActive) AND u.UserId <> @me
+     ORDER BY COALESCE(e.EmployeeName, u.Username)`,
     { me: [sql.Int, actor.userId] },
   );
   return r.recordset.map((u) => ({
@@ -201,8 +195,8 @@ export async function listConversations(actor: AuthUser) {
     `${CONVERSATION_SELECT}
      WHERE m.UserId = @me
        -- a new direct chat shows up for the other person once it has a message
-       AND (c.Kind <> N'Direct' OR c.LastMessageAt IS NOT NULL OR c.CreatedByUserId = @me)
-     ORDER BY CASE WHEN c.Kind = N'Company' THEN 0 ELSE 1 END, ISNULL(c.LastMessageAt, c.CreatedAt) DESC`,
+       AND (c.Kind <> 'Direct' OR c.LastMessageAt IS NOT NULL OR c.CreatedByUserId = @me)
+     ORDER BY CASE WHEN c.Kind = 'Company' THEN 0 ELSE 1 END, COALESCE(c.LastMessageAt, c.CreatedAt) DESC`,
     { me: [sql.Int, actor.userId] },
   );
   return r.recordset.map(mapConversation);
@@ -223,19 +217,15 @@ export async function openDirect(actor: AuthUser, otherUserId: number) {
   if (!(await activeUserIds([otherUserId])).length) throw badRequest('This user does not exist or is inactive.');
 
   const key = `${Math.min(actor.userId, otherUserId)}:${Math.max(actor.userId, otherUserId)}`;
+  // One statement, so the conversation and both memberships are created together (or not at all)
   const r = await query(
-    `IF NOT EXISTS (SELECT 1 FROM dbo.ChatConversations WHERE DirectKey = @key)
-       BEGIN TRY
-         BEGIN TRANSACTION;
-         INSERT INTO dbo.ChatConversations (Kind, DirectKey, CreatedByUserId) VALUES (N'Direct', @key, @me);
-         DECLARE @new INT = SCOPE_IDENTITY();
-         INSERT INTO dbo.ChatMembers (ConversationId, UserId) VALUES (@new, @me), (@new, @other);
-         COMMIT;
-       END TRY
-       BEGIN CATCH
-         IF @@TRANCOUNT > 0 ROLLBACK;
-         IF ERROR_NUMBER() NOT IN (${DUPLICATE_KEY}) THROW;
-       END CATCH;
+    `WITH created AS (
+       INSERT INTO dbo.ChatConversations (Kind, DirectKey, CreatedByUserId) VALUES ('Direct', @key, @me)
+       ON CONFLICT (DirectKey) WHERE DirectKey IS NOT NULL DO NOTHING
+       RETURNING ConversationId
+     )
+     INSERT INTO dbo.ChatMembers (ConversationId, UserId)
+       SELECT created.ConversationId, m.UserId FROM created, unnest(ARRAY[@me::int, @other::int]) AS m(UserId);
      SELECT ConversationId FROM dbo.ChatConversations WHERE DirectKey = @key;`,
     { key: [sql.NVarChar(30), key], me: [sql.Int, actor.userId], other: [sql.Int, otherUserId] },
   );
@@ -256,18 +246,18 @@ export async function createGroup(actor: AuthUser, title: string, memberIds: num
   const members = await activeUserIds([...new Set(memberIds.filter((id) => id !== actor.userId))]);
   if (!members.length) throw badRequest('Add at least one other person to the group.');
   const r = await query(
-    `SET XACT_ABORT ON;
-     BEGIN TRANSACTION;
-     INSERT INTO dbo.ChatConversations (Kind, Title, CreatedByUserId) VALUES (N'Group', @title, @me);
-     DECLARE @new INT = SCOPE_IDENTITY();
-     INSERT INTO dbo.ChatMembers (ConversationId, UserId)
-       SELECT @new, CAST(value AS INT) FROM STRING_SPLIT(@ids, N',');
-     COMMIT;
-     SELECT @new AS ConversationId;`,
+    `WITH created AS (
+       INSERT INTO dbo.ChatConversations (Kind, Title, CreatedByUserId) VALUES ('Group', @title, @me)
+       RETURNING ConversationId
+     ), joined AS (
+       INSERT INTO dbo.ChatMembers (ConversationId, UserId)
+       SELECT created.ConversationId, m.UserId FROM created, unnest(@ids::int[]) AS m(UserId)
+     )
+     SELECT ConversationId FROM created`,
     {
       title: [sql.NVarChar(100), title],
       me: [sql.Int, actor.userId],
-      ids: [sql.NVarChar(sql.MAX), [actor.userId, ...members].join(',')],
+      ids: [sql.Int, [actor.userId, ...members]],
     },
   );
   const id = r.recordset[0].ConversationId as number;
@@ -293,7 +283,7 @@ export async function listMembers(actor: AuthUser, conversationId: number) {
      FROM dbo.ChatMembers m JOIN dbo.Users u ON u.UserId = m.UserId
      LEFT JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
      WHERE m.ConversationId = @id
-     ORDER BY ISNULL(e.EmployeeName, u.Username)`,
+     ORDER BY COALESCE(e.EmployeeName, u.Username)`,
     { id: [sql.Int, conversationId] },
   );
   return r.recordset.map((u) => ({
@@ -313,10 +303,10 @@ export async function addMembers(actor: AuthUser, conversationId: number, userId
     // New members start at the latest message: earlier history is readable but not "unread"
     await query(
       `INSERT INTO dbo.ChatMembers (ConversationId, UserId, LastReadMessageId)
-       SELECT @id, CAST(value AS INT),
-              ISNULL((SELECT MAX(MessageId) FROM dbo.ChatMessages WHERE ConversationId = @id), 0)
-       FROM STRING_SPLIT(@ids, N',')`,
-      { id: [sql.Int, conversationId], ids: [sql.NVarChar(sql.MAX), added.join(',')] },
+       SELECT @id, m.UserId, COALESCE((SELECT MAX(MessageId) FROM dbo.ChatMessages WHERE ConversationId = @id), 0)
+       FROM unnest(@ids::int[]) AS m(UserId)
+       ON CONFLICT DO NOTHING`,
+      { id: [sql.Int, conversationId], ids: [sql.Int, added] },
     );
   }
   publish(actor.clientId, [...a.memberIds, ...added], 'conversation', { conversationId });
@@ -351,18 +341,20 @@ export async function getMessages(actor: AuthUser, conversationId: number, w: Me
   const base: Params = { id: [sql.Int, conversationId] };
   const older = async (beforeId: number | null, limit: number) => {
     const r = await query(
-      `SELECT TOP (@limit) * FROM (${MESSAGE_SELECT}
-         WHERE x.ConversationId = @id AND (@before IS NULL OR x.MessageId < @before)) t
-       ORDER BY t.MessageId DESC`,
+      `SELECT * FROM (${MESSAGE_SELECT}
+         WHERE x.ConversationId = @id AND (@before::bigint IS NULL OR x.MessageId < @before)) t
+       ORDER BY t.MessageId DESC
+       LIMIT @limit`,
       { ...base, before: [sql.BigInt, beforeId], limit: [sql.Int, limit + 1] },
     );
     return { rows: r.recordset.slice(0, limit).reverse(), more: r.recordset.length > limit };
   };
   const newer = async (afterId: number, limit: number) => {
     const r = await query(
-      `SELECT TOP (@limit) * FROM (${MESSAGE_SELECT}
+      `SELECT * FROM (${MESSAGE_SELECT}
          WHERE x.ConversationId = @id AND x.MessageId > @after) t
-       ORDER BY t.MessageId ASC`,
+       ORDER BY t.MessageId ASC
+       LIMIT @limit`,
       { ...base, after: [sql.BigInt, afterId], limit: [sql.Int, limit + 1] },
     );
     return { rows: r.recordset.slice(0, limit), more: r.recordset.length > limit };
@@ -410,30 +402,36 @@ export async function sendMessage(actor: AuthUser, conversationId: number, body:
     const other = a.memberIds.find((id) => id !== actor.userId);
     if (other && !(await activeUserIds([other])).length) throw badRequest('This user is inactive and cannot receive messages.');
   }
-  const r = await query(
-    `SET XACT_ABORT ON;
-     BEGIN TRANSACTION;
-     DECLARE @ids TABLE (MessageId BIGINT);
-     INSERT INTO dbo.ChatMessages (ConversationId, SenderUserId, Body)
-     OUTPUT INSERTED.MessageId INTO @ids VALUES (@id, @me, @body);
-     DECLARE @mid BIGINT = (SELECT MessageId FROM @ids);
-     IF @fileName IS NOT NULL
-       INSERT INTO dbo.ChatAttachments (MessageId, FileName, ContentType, SizeBytes, Content)
-       VALUES (@mid, @fileName, @contentType, DATALENGTH(@content), @content);
-     UPDATE dbo.ChatConversations SET LastMessageAt = SYSUTCDATETIME() WHERE ConversationId = @id;
-     UPDATE dbo.ChatMembers SET LastReadMessageId = @mid WHERE ConversationId = @id AND UserId = @me;
-     COMMIT;
-     SELECT @mid AS MessageId;`,
-    {
-      id: [sql.Int, conversationId],
-      me: [sql.Int, actor.userId],
-      body: [sql.NVarChar(2000), body],
-      fileName: [sql.NVarChar(255), attachment?.fileName ?? null],
-      contentType: [sql.NVarChar(100), attachment?.contentType ?? null],
-      content: [sql.VarBinary(sql.MAX), attachment?.content ?? null],
-    },
-  );
-  const message = mapMessage((await loadMessage(Number(r.recordset[0].MessageId)))!);
+  const messageId = await withTransaction(async (tx) => {
+    const r = await query(
+      `INSERT INTO dbo.ChatMessages (ConversationId, SenderUserId, Body) VALUES (@id, @me, @body) RETURNING MessageId`,
+      { id: [sql.Int, conversationId], me: [sql.Int, actor.userId], body: [sql.NVarChar(2000), body] },
+      tx,
+    );
+    const mid = Number(r.recordset[0].MessageId);
+    if (attachment) {
+      await query(
+        `INSERT INTO dbo.ChatAttachments (MessageId, FileName, ContentType, SizeBytes, Content)
+         VALUES (@mid, @fileName, @contentType, @size, @content)`,
+        {
+          mid: [sql.BigInt, mid],
+          size: [sql.Int, attachment.content.length],
+          fileName: [sql.NVarChar(255), attachment.fileName],
+          contentType: [sql.NVarChar(100), attachment.contentType],
+          content: [sql.VarBinary(sql.MAX), attachment.content],
+        },
+        tx,
+      );
+    }
+    await query(
+      `UPDATE dbo.ChatConversations SET LastMessageAt = now() WHERE ConversationId = @id;
+       UPDATE dbo.ChatMembers SET LastReadMessageId = @mid WHERE ConversationId = @id AND UserId = @me;`,
+      { id: [sql.Int, conversationId], me: [sql.Int, actor.userId], mid: [sql.BigInt, mid] },
+      tx,
+    );
+    return mid;
+  });
+  const message = mapMessage((await loadMessage(messageId))!);
   publish(actor.clientId, recipients(a), 'message', { ...message, kind: a.kind });
   return message;
 }
@@ -451,7 +449,7 @@ export async function editMessage(actor: AuthUser, messageId: number, body: stri
   const { row, a } = await ownMessage(actor, messageId);
   if (row.SenderUserId !== actor.userId) throw forbidden('You can only edit your own messages.');
   if (!body && row.AttachmentId === null) throw badRequest('Type a message');
-  await query(`UPDATE dbo.ChatMessages SET Body = @body, EditedAt = SYSUTCDATETIME() WHERE MessageId = @mid`, {
+  await query(`UPDATE dbo.ChatMessages SET Body = @body, EditedAt = now() WHERE MessageId = @mid`, {
     mid: [sql.BigInt, messageId],
     body: [sql.NVarChar(2000), body],
   });
@@ -465,7 +463,7 @@ export async function deleteMessage(actor: AuthUser, messageId: number) {
   const { row, a } = await ownMessage(actor, messageId);
   if (row.SenderUserId !== actor.userId && actor.role !== 'Admin') throw forbidden('You can only delete your own messages.');
   await query(
-    `UPDATE dbo.ChatMessages SET Body = N'', DeletedAt = SYSUTCDATETIME() WHERE MessageId = @mid;
+    `UPDATE dbo.ChatMessages SET Body = '', DeletedAt = now() WHERE MessageId = @mid;
      UPDATE dbo.ChatAttachments SET Content = NULL WHERE MessageId = @mid;`,
     { mid: [sql.BigInt, messageId] },
   );
@@ -523,15 +521,17 @@ export async function unreadTotal(actor: AuthUser): Promise<number> {
 export async function search(actor: AuthUser, term: string) {
   await ensureCompanyConversation(actor);
   const r = await query(
-    `SELECT TOP 50 t.*, c.Kind, c.Title,
-            (SELECT TOP 1 ISNULL(oe.EmployeeName, ou.Username)
+    `SELECT t.*, c.Kind, c.Title,
+            (SELECT COALESCE(oe.EmployeeName, ou.Username)
              FROM dbo.ChatMembers o JOIN dbo.Users ou ON ou.UserId = o.UserId
              LEFT JOIN dbo.Employees oe ON oe.EmployeeId = ou.EmployeeId
-             WHERE c.Kind = N'Direct' AND o.ConversationId = c.ConversationId AND o.UserId <> @me) AS OtherName
-     FROM (${MESSAGE_SELECT} WHERE x.DeletedAt IS NULL AND (x.Body LIKE @q OR a.FileName LIKE @q)) t
+             WHERE c.Kind = 'Direct' AND o.ConversationId = c.ConversationId AND o.UserId <> @me
+             LIMIT 1) AS OtherName
+     FROM (${MESSAGE_SELECT} WHERE x.DeletedAt IS NULL AND (x.Body ILIKE @q OR a.FileName ILIKE @q)) t
      JOIN dbo.ChatConversations c ON c.ConversationId = t.ConversationId
      JOIN dbo.ChatMembers m ON m.ConversationId = c.ConversationId AND m.UserId = @me
-     ORDER BY t.MessageId DESC`,
+     ORDER BY t.MessageId DESC
+     LIMIT 50`,
     { me: [sql.Int, actor.userId], q: likeParam(term) },
   );
   return r.recordset.map((row) => {

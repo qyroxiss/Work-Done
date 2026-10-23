@@ -37,7 +37,7 @@ export async function listEmployees(q: { search?: string; isActive?: boolean; pa
   const where: string[] = [];
   const params: Params = {};
   if (q.search) {
-    where.push('(EmployeeCode LIKE @s OR EmployeeName LIKE @s OR Department LIKE @s OR Email LIKE @s OR Phone LIKE @s)');
+    where.push('(EmployeeCode ILIKE @s OR EmployeeName ILIKE @s OR Department ILIKE @s OR Email ILIKE @s OR Phone ILIKE @s)');
     params.s = likeParam(q.search);
   }
   if (q.isActive !== undefined) {
@@ -64,8 +64,8 @@ export async function getEmployee(id: number) {
 export async function createEmployee(data: EmployeeInput) {
   const r = await query(
     `INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, Department, Phone, Email, JoiningDate, IsActive)
-     OUTPUT INSERTED.EmployeeId
-     VALUES (@code, @name, @dept, @phone, @email, @joining, @active)`,
+     VALUES (@code, @name, @dept, @phone, @email, @joining, @active)
+     RETURNING EmployeeId`,
     inputParams(data),
   );
   return getEmployee(r.recordset[0].EmployeeId);
@@ -75,7 +75,7 @@ export async function updateEmployee(id: number, data: EmployeeInput) {
   const r = await query(
     `UPDATE dbo.Employees
      SET EmployeeCode = @code, EmployeeName = @name, Department = @dept, Phone = @phone,
-         Email = @email, JoiningDate = @joining, IsActive = @active, UpdatedAt = SYSUTCDATETIME()
+         Email = @email, JoiningDate = @joining, IsActive = @active, UpdatedAt = now()
      WHERE EmployeeId = @id`,
     { ...inputParams(data), id: [sql.Int, id] },
   );

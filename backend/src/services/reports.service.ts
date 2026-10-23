@@ -21,13 +21,21 @@ const WORK_FROM = `dbo.WorkItems w
 
 const WORK_COLUMNS = `w.WorkId, w.WorkNo, w.Title, w.Priority, w.Status, w.StartDate, w.DueDate,
   w.CreatedAt, w.UpdatedAt, w.ClosedAt, w.ProductId, p.ProductCode, p.ProductName, w.ProductGroupId, g.GroupName,
-  CASE WHEN w.DueDate < @today AND w.Status NOT IN (N'Completed', N'Closed') THEN 1 ELSE 0 END AS IsOverdue,
-  CASE WHEN w.DueDate < @today AND w.Status NOT IN (N'Completed', N'Closed') THEN DATEDIFF(DAY, w.DueDate, @today) ELSE 0 END AS DaysOverdue`;
+  (w.DueDate < @today AND w.Status NOT IN ('Completed', 'Closed')) AS IsOverdue,
+  CASE WHEN w.DueDate < @today AND w.Status NOT IN ('Completed', 'Closed') THEN @today::date - w.DueDate ELSE 0 END AS DaysOverdue`;
+
+/**
+ * SQL for the office's local calendar day of a timestamp column (@tz = minutes ahead of UTC).
+ * Computed from UTC, so it does not depend on the database server's time zone.
+ */
+function localDay(column: string): string {
+  return `((${column} AT TIME ZONE 'UTC') + make_interval(mins => @tz::int))::date`;
+}
 
 function commonFilters(q: ListFilterQuery, where: string[], params: Params) {
   if (q.employeeId) {
     where.push(`EXISTS (SELECT 1 FROM dbo.WorkAssignments fa
-                        WHERE fa.WorkId = w.WorkId AND fa.IsActive = 1 AND fa.EmployeeId = @employeeId)`);
+                        WHERE fa.WorkId = w.WorkId AND fa.IsActive AND fa.EmployeeId = @employeeId)`);
     params.employeeId = [sql.Int, q.employeeId];
   }
   if (q.productGroupId) {
@@ -42,10 +50,11 @@ function todayParam(): Params {
 
 async function workList(where: string[], params: Params, orderBy: string, extraColumns = '', extraFrom = '') {
   const r = await query(
-    `SELECT TOP (${MAX_REPORT_ROWS}) ${WORK_COLUMNS}${extraColumns}
+    `SELECT ${WORK_COLUMNS}${extraColumns}
      FROM ${WORK_FROM} ${extraFrom}
      WHERE ${where.join(' AND ')}
-     ORDER BY ${orderBy}`,
+     ORDER BY ${orderBy}
+     LIMIT ${MAX_REPORT_ROWS}`,
     params,
   );
   return { rows: r.recordset as Row[], items: await attachAssignees(r.recordset.map(mapWorkRow)) };
@@ -67,7 +76,7 @@ export async function employeeWork(q: OptionalRangeQuery) {
     workConditions.push('w.ProductGroupId = @groupId');
     params.groupId = [sql.Int, q.productGroupId];
   }
-  const employeeConditions = ['(e.IsActive = 1 OR w.WorkId IS NOT NULL)'];
+  const employeeConditions = ['(e.IsActive OR w.WorkId IS NOT NULL)'];
   if (q.employeeId) {
     employeeConditions.push('e.EmployeeId = @employeeId');
     params.employeeId = [sql.Int, q.employeeId];
@@ -77,15 +86,15 @@ export async function employeeWork(q: OptionalRangeQuery) {
   const r = await query(
     `SELECT e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.Department, e.IsActive,
        COUNT(w.WorkId) AS Total,
-       SUM(CASE WHEN w.Status = N'Pending' THEN 1 ELSE 0 END) AS Pending,
-       SUM(CASE WHEN w.Status = N'In Progress' THEN 1 ELSE 0 END) AS InProgress,
-       SUM(CASE WHEN w.Status = N'On Hold' THEN 1 ELSE 0 END) AS OnHold,
-       SUM(CASE WHEN w.Status = N'Reopened' THEN 1 ELSE 0 END) AS Reopened,
-       SUM(CASE WHEN w.Status = N'Completed' THEN 1 ELSE 0 END) AS Completed,
-       SUM(CASE WHEN w.Status = N'Closed' THEN 1 ELSE 0 END) AS Closed,
-       SUM(CASE WHEN w.DueDate < @today AND w.Status NOT IN (N'Completed', N'Closed') THEN 1 ELSE 0 END) AS Overdue
+       SUM(CASE WHEN w.Status = 'Pending' THEN 1 ELSE 0 END) AS Pending,
+       SUM(CASE WHEN w.Status = 'In Progress' THEN 1 ELSE 0 END) AS InProgress,
+       SUM(CASE WHEN w.Status = 'On Hold' THEN 1 ELSE 0 END) AS OnHold,
+       SUM(CASE WHEN w.Status = 'Reopened' THEN 1 ELSE 0 END) AS Reopened,
+       SUM(CASE WHEN w.Status = 'Completed' THEN 1 ELSE 0 END) AS Completed,
+       SUM(CASE WHEN w.Status = 'Closed' THEN 1 ELSE 0 END) AS Closed,
+       SUM(CASE WHEN w.DueDate < @today AND w.Status NOT IN ('Completed', 'Closed') THEN 1 ELSE 0 END) AS Overdue
      FROM dbo.Employees e
-     LEFT JOIN dbo.WorkAssignments wa ON wa.EmployeeId = e.EmployeeId AND wa.IsActive = 1
+     LEFT JOIN dbo.WorkAssignments wa ON wa.EmployeeId = e.EmployeeId AND wa.IsActive
      LEFT JOIN dbo.WorkItems w ON w.WorkId = wa.WorkId${joinFilter}
      WHERE ${employeeConditions.join(' AND ')}
      GROUP BY e.EmployeeId, e.EmployeeCode, e.EmployeeName, e.Department, e.IsActive
@@ -113,19 +122,19 @@ export async function employeeWork(q: OptionalRangeQuery) {
 
 export async function pendingWork(q: ListFilterQuery) {
   const params: Params = todayParam();
-  const where = [`w.Status IN (N'Pending', N'In Progress', N'On Hold', N'Reopened')`];
+  const where = [`w.Status IN ('Pending', 'In Progress', 'On Hold', 'Reopened')`];
   commonFilters(q, where, params);
   const { rows, items } = await workList(
     where,
     params,
-    'CASE WHEN w.DueDate IS NULL THEN 1 ELSE 0 END, w.DueDate, w.WorkId',
+    'w.DueDate NULLS LAST, w.WorkId',
   );
   return { rows: items.map((item, i) => ({ ...item, daysOverdue: Number(rows[i].DaysOverdue) })) };
 }
 
 export async function overdueWork(q: ListFilterQuery) {
   const params: Params = todayParam();
-  const where = [`w.DueDate < @today`, `w.Status NOT IN (N'Completed', N'Closed')`];
+  const where = [`w.DueDate < @today`, `w.Status NOT IN ('Completed', 'Closed')`];
   commonFilters(q, where, params);
   const { rows, items } = await workList(where, params, 'w.DueDate, w.WorkId');
   return { rows: items.map((item, i) => ({ ...item, daysOverdue: Number(rows[i].DaysOverdue) })) };
@@ -139,7 +148,7 @@ export async function completedWork(q: RequiredRangeQuery) {
     toTs: [sql.DateTime2(0), localDayEndExclusive(q.toDate)],
     tz: [sql.Int, localOffsetMinutes()],
   };
-  const where = [`w.Status IN (N'Completed', N'Closed')`, 'c.ChangedAt >= @fromTs', 'c.ChangedAt < @toTs'];
+  const where = [`w.Status IN ('Completed', 'Closed')`, 'c.ChangedAt >= @fromTs', 'c.ChangedAt < @toTs'];
   commonFilters(q, where, params);
   const { rows, items } = await workList(
     where,
@@ -147,11 +156,12 @@ export async function completedWork(q: RequiredRangeQuery) {
     'c.ChangedAt DESC, w.WorkId DESC',
     `, c.ChangedAt AS CompletedAt, COALESCE(ce.EmployeeName, cu.Username) AS CompletedByName,
        CASE WHEN w.DueDate IS NULL THEN NULL
-            WHEN CAST(DATEADD(MINUTE, @tz, c.ChangedAt) AS DATE) <= w.DueDate THEN 1 ELSE 0 END AS OnTime`,
-    `CROSS APPLY (SELECT TOP 1 h.ChangedAt, h.ChangedByUserId
-                  FROM dbo.WorkStatusHistory h
-                  WHERE h.WorkId = w.WorkId AND h.EntryType = N'StatusChange' AND h.NewStatus = N'Completed'
-                  ORDER BY h.ChangedAt DESC, h.HistoryId DESC) c
+            ELSE ${localDay('c.ChangedAt')} <= w.DueDate END AS OnTime`,
+    `JOIN LATERAL (SELECT h.ChangedAt, h.ChangedByUserId
+                   FROM dbo.WorkStatusHistory h
+                   WHERE h.WorkId = w.WorkId AND h.EntryType = 'StatusChange' AND h.NewStatus = 'Completed'
+                   ORDER BY h.ChangedAt DESC, h.HistoryId DESC
+                   LIMIT 1) c ON true
      JOIN dbo.Users cu ON cu.UserId = c.ChangedByUserId
      LEFT JOIN dbo.Employees ce ON ce.EmployeeId = cu.EmployeeId`,
   );
@@ -179,22 +189,22 @@ export async function workSummary(q: RequiredRangeQuery) {
   const extra = where.length ? ` AND ${where.join(' AND ')}` : '';
 
   const result = await query(
-    `SELECT CAST(DATEADD(MINUTE, @tz, w.CreatedAt) AS DATE) AS Day, COUNT(*) AS Cnt
+    `SELECT ${localDay('w.CreatedAt')} AS Day, COUNT(*) AS Cnt
      FROM dbo.WorkItems w
      WHERE w.CreatedAt >= @fromTs AND w.CreatedAt < @toTs${extra}
-     GROUP BY CAST(DATEADD(MINUTE, @tz, w.CreatedAt) AS DATE);
+     GROUP BY 1;
 
      SELECT w.DueDate AS Day, COUNT(*) AS Cnt
      FROM dbo.WorkItems w
      WHERE w.DueDate BETWEEN @fromDate AND @toDate${extra}
      GROUP BY w.DueDate;
 
-     SELECT CAST(DATEADD(MINUTE, @tz, h.ChangedAt) AS DATE) AS Day, h.NewStatus, COUNT(*) AS Cnt
+     SELECT ${localDay('h.ChangedAt')} AS Day, h.NewStatus, COUNT(*) AS Cnt
      FROM dbo.WorkStatusHistory h
      JOIN dbo.WorkItems w ON w.WorkId = h.WorkId
-     WHERE h.EntryType = N'StatusChange' AND h.NewStatus IN (N'Completed', N'Closed', N'Reopened')
+     WHERE h.EntryType = 'StatusChange' AND h.NewStatus IN ('Completed', 'Closed', 'Reopened')
        AND h.ChangedAt >= @fromTs AND h.ChangedAt < @toTs${extra}
-     GROUP BY CAST(DATEADD(MINUTE, @tz, h.ChangedAt) AS DATE), h.NewStatus;`,
+     GROUP BY 1, h.NewStatus;`,
     params,
   );
   const [createdRows, dueRows, statusRows] = recordsets(result);

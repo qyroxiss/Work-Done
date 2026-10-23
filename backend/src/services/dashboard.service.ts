@@ -27,13 +27,13 @@ export async function getDashboard(user: AuthUser) {
     weekEnd: [sql.Date, weekEnd],
   };
   // Employees only see their own assigned work
-  let scope = '1 = 1';
+  let scope = 'true';
   if (!manager) {
     scope = `EXISTS (SELECT 1 FROM dbo.WorkAssignments sa
-                     WHERE sa.WorkId = w.WorkId AND sa.IsActive = 1 AND sa.EmployeeId = @emp)`;
+                     WHERE sa.WorkId = w.WorkId AND sa.IsActive AND sa.EmployeeId = @emp)`;
     params.emp = [sql.Int, user.employeeId];
   }
-  const open = `w.Status NOT IN (N'Completed', N'Closed')`;
+  const open = `w.Status NOT IN ('Completed', 'Closed')`;
 
   const result = await query(
     `SELECT w.Status, COUNT(*) AS Cnt FROM dbo.WorkItems w WHERE ${scope} GROUP BY w.Status;
@@ -44,29 +44,31 @@ export async function getDashboard(user: AuthUser) {
        SUM(CASE WHEN ${open} AND w.DueDate >= @today AND w.DueDate < @weekEnd THEN 1 ELSE 0 END) AS DueThisWeek,
        SUM(CASE WHEN ${open} AND a.HasAssignee IS NULL THEN 1 ELSE 0 END) AS Unassigned
      FROM dbo.WorkItems w
-     OUTER APPLY (SELECT TOP 1 1 AS HasAssignee FROM dbo.WorkAssignments xa
-                  WHERE xa.WorkId = w.WorkId AND xa.IsActive = 1) a
+     LEFT JOIN LATERAL (SELECT 1 AS HasAssignee FROM dbo.WorkAssignments xa
+                        WHERE xa.WorkId = w.WorkId AND xa.IsActive LIMIT 1) a ON true
      WHERE ${scope};
 
-     SELECT TOP 10 w.WorkId, w.WorkNo, w.Title, w.Priority, w.Status, w.StartDate, w.DueDate,
+     SELECT w.WorkId, w.WorkNo, w.Title, w.Priority, w.Status, w.StartDate, w.DueDate,
             w.CreatedAt, w.UpdatedAt, w.ClosedAt, w.ProductId, p.ProductCode, p.ProductName,
             w.ProductGroupId, g.GroupName,
-            CASE WHEN w.DueDate < @today THEN 1 ELSE 0 END AS IsOverdue
+            (w.DueDate < @today) AS IsOverdue
      FROM dbo.WorkItems w
      LEFT JOIN dbo.Products p ON p.ProductId = w.ProductId
      LEFT JOIN dbo.ProductGroups g ON g.ProductGroupId = w.ProductGroupId
      WHERE ${scope} AND ${open}
-     ORDER BY CASE WHEN w.DueDate IS NULL THEN 1 ELSE 0 END, w.DueDate,
-              CASE w.Priority WHEN N'Urgent' THEN 1 WHEN N'High' THEN 2 WHEN N'Medium' THEN 3 ELSE 4 END;
+     ORDER BY w.DueDate NULLS LAST,
+              CASE w.Priority WHEN 'Urgent' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END
+     LIMIT 10;
 
-     SELECT TOP 12 h.HistoryId, h.WorkId, w.WorkNo, w.Title, h.EntryType, h.OldStatus, h.NewStatus,
+     SELECT h.HistoryId, h.WorkId, w.WorkNo, w.Title, h.EntryType, h.OldStatus, h.NewStatus,
             h.Notes, h.ChangedAt, COALESCE(e.EmployeeName, u.Username) AS ChangedByName
      FROM dbo.WorkStatusHistory h
      JOIN dbo.WorkItems w ON w.WorkId = h.WorkId
      JOIN dbo.Users u ON u.UserId = h.ChangedByUserId
      LEFT JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
      WHERE ${scope}
-     ORDER BY h.ChangedAt DESC, h.HistoryId DESC;`,
+     ORDER BY h.ChangedAt DESC, h.HistoryId DESC
+     LIMIT 12;`,
     params,
   );
   const [statusRows, countRows, upcomingRows, activityRows] = recordsets(result);

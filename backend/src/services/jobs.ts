@@ -1,4 +1,4 @@
-import { runInDatabase } from '../database/pool.js';
+﻿import { runInDatabase } from '../database/pool.js';
 import { listClients } from './clients.service.js';
 import { sendDueAlerts } from './notifications.service.js';
 import { runDueTemplates } from './recurring.service.js';
@@ -13,7 +13,7 @@ const warned = new Set<string>();
 export async function runJobsOnce() {
   for (const client of await listClients()) {
     if (!client.isActive) continue;
-    await runInDatabase(client.databaseName, async () => {
+    await runInDatabase(client.schemaName, async () => {
       try {
         const created = await runDueTemplates(client.clientId);
         const alerts = await sendDueAlerts(client.clientId);

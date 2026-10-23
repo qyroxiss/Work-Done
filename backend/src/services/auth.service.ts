@@ -59,7 +59,7 @@ export async function login(
     });
     throw new HttpError(401, INVALID_LOGIN_MESSAGE, 'INVALID_CREDENTIALS');
   }
-  return runInDatabase(client.databaseName, async () => {
+  return runInDatabase(client.schemaName, async () => {
     const result = await loginToClient(client, identifier, password, meta);
     return { ...result, client };
   });
@@ -97,9 +97,9 @@ async function loginToClient(client: Client, identifier: string, password: strin
   const token = crypto.randomBytes(32).toString('base64url');
   const inserted = await query(
     `INSERT INTO dbo.Sessions (TokenHash, UserId, ExpiresAt, IpAddress, UserAgent)
-     OUTPUT INSERTED.SessionId
-     VALUES (@hash, @userId, DATEADD(HOUR, @hours, SYSUTCDATETIME()), @ip, @ua);
-     UPDATE dbo.Users SET LastLoginAt = SYSUTCDATETIME() WHERE UserId = @userId;`,
+     VALUES (@hash, @userId, now() + make_interval(hours => @hours::int), @ip, @ua)
+     RETURNING SessionId;
+     UPDATE dbo.Users SET LastLoginAt = now() WHERE UserId = @userId;`,
     {
       hash: [sql.Char(64), hashToken(token)],
       userId: [sql.Int, row.UserId],
@@ -132,18 +132,18 @@ async function loginToClient(client: Client, identifier: string, password: strin
 export async function getSessionUser(token: string, client: Client): Promise<AuthUser | null> {
   if (token.length > 100) return null;
   const result = await query(
-    `SELECT s.SessionId, DATEDIFF(SECOND, s.LastSeenAt, SYSUTCDATETIME()) AS IdleSeconds,
+    `SELECT s.SessionId, EXTRACT(EPOCH FROM now() - s.LastSeenAt)::int AS IdleSeconds,
             u.UserId, u.Username, u.Role, u.EmployeeId, u.MustChangePassword, e.EmployeeName
      FROM dbo.Sessions s
      JOIN dbo.Users u ON u.UserId = s.UserId
      LEFT JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
      WHERE s.TokenHash = @hash
        AND s.RevokedAt IS NULL
-       AND s.ExpiresAt > SYSUTCDATETIME()
-       AND s.LastSeenAt > DATEADD(MINUTE, -@idle, SYSUTCDATETIME())
-       AND u.IsActive = 1
+       AND s.ExpiresAt > now()
+       AND s.LastSeenAt > now() - make_interval(mins => @idle::int)
+       AND u.IsActive
        AND u.ClientId = @clientId
-       AND (u.EmployeeId IS NULL OR e.IsActive = 1)`,
+       AND (u.EmployeeId IS NULL OR e.IsActive)`,
     {
       hash: [sql.Char(64), hashToken(token)],
       idle: [sql.Int, config.session.idleMinutes],
@@ -155,7 +155,7 @@ export async function getSessionUser(token: string, client: Client): Promise<Aut
 
   // Sliding inactivity window; throttle writes to at most once a minute per session
   if (row.IdleSeconds >= 60) {
-    await query(`UPDATE dbo.Sessions SET LastSeenAt = SYSUTCDATETIME() WHERE SessionId = @id`, {
+    await query(`UPDATE dbo.Sessions SET LastSeenAt = now() WHERE SessionId = @id`, {
       id: [sql.BigInt, row.SessionId],
     });
   }
@@ -174,7 +174,7 @@ export async function getSessionUser(token: string, client: Client): Promise<Aut
 
 export async function logout(user: AuthUser, ip: string | undefined): Promise<void> {
   await query(
-    `UPDATE dbo.Sessions SET RevokedAt = SYSUTCDATETIME() WHERE SessionId = @id AND RevokedAt IS NULL`,
+    `UPDATE dbo.Sessions SET RevokedAt = now() WHERE SessionId = @id AND RevokedAt IS NULL`,
     { id: [sql.BigInt, user.sessionId] },
   );
   await logSecurityEvent('LOGOUT', { userId: user.userId, username: user.username, ip });
@@ -182,8 +182,8 @@ export async function logout(user: AuthUser, ip: string | undefined): Promise<vo
 
 export async function revokeUserSessions(userId: number, exceptSessionId?: number): Promise<void> {
   await query(
-    `UPDATE dbo.Sessions SET RevokedAt = SYSUTCDATETIME()
-     WHERE UserId = @userId AND RevokedAt IS NULL AND (@except IS NULL OR SessionId <> @except)`,
+    `UPDATE dbo.Sessions SET RevokedAt = now()
+     WHERE UserId = @userId AND RevokedAt IS NULL AND (@except::bigint IS NULL OR SessionId <> @except)`,
     { userId: [sql.Int, userId], except: [sql.BigInt, exceptSessionId ?? null] },
   );
 }
@@ -202,7 +202,7 @@ export async function changePassword(
     throw new HttpError(400, 'Current password is incorrect.', 'INVALID_PASSWORD');
   }
   await query(
-    `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = 0, UpdatedAt = SYSUTCDATETIME()
+    `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = false, UpdatedAt = now()
      WHERE UserId = @id`,
     { hash: [sql.NVarChar(255), await hashPassword(newPassword)], id: [sql.Int, user.userId] },
   );
@@ -215,15 +215,15 @@ export async function changePassword(
 export async function purgeOldSessions(): Promise<void> {
   await query(
     `DELETE FROM dbo.Sessions
-     WHERE (RevokedAt IS NOT NULL AND RevokedAt < DATEADD(DAY, -7, SYSUTCDATETIME()))
-        OR ExpiresAt < DATEADD(DAY, -7, SYSUTCDATETIME())`,
+     WHERE (RevokedAt IS NOT NULL AND RevokedAt < now() - interval '7 days')
+        OR ExpiresAt < now() - interval '7 days'`,
   );
 }
 
-/** Runs the session cleanup in every client database. */
+/** Runs the session cleanup for every client. */
 export async function purgeOldSessionsAllClients(): Promise<void> {
   for (const client of await listClients()) {
-    await runInDatabase(client.databaseName, purgeOldSessions).catch((err: Error) =>
+    await runInDatabase(client.schemaName, purgeOldSessions).catch((err: Error) =>
       console.error(`[sessions] cleanup failed for ${client.clientId}:`, err.message),
     );
   }

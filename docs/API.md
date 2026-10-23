@@ -91,13 +91,18 @@ repeating templates `leadDays` before they are due (catching up at most 12 misse
 "due today" reminders to assignees and "overdue" reminders (once per due date) to assignees and the creator.
 Titles may contain `{month}` (due month, e.g. "Oct 2026"), `{prevMonth}` ("Sep 2026") and `{date}` ("20 Oct 2026").
 
-## Client companies (server computer only)
+## Setup and client companies
 
-Answered only for requests from the server computer itself (localhost), once setup is complete.
-Each client has its own database `WorkDone_<CLIENTID>`, registered in `dbo.Clients` of the main database.
+Answered only for requests from the server computer itself (localhost), or with the header `X-Setup-Key` equal to
+the server's `SETUP_KEY` (when set). Each client has its own schema `wd_<clientid>`, registered in `public.Clients`.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | /setup/clients | `{items[], sqlcmdAvailable}` |
-| POST | /setup/clients | `{companyName, clientId, username, email?, password, sqlUser?, sqlPassword?}`. Creates the database, tables and first admin (must change password). Without `sqlUser`, uses the Windows account running WorkDone |
+| GET | /setup/status | `{needsSetup, step: database \| admin \| done, isLocal, onServerComputer, setupKeyEnabled}`; open to everyone |
+| POST | /setup/test-connection | `{url}` (PostgreSQL connection string) → `{ok, version, database, user, canCreate}` or `{ok: false, error}` |
+| POST | /setup/database | `{url}`: saves `DATABASE_URL` to `backend/.env` and creates the shared tables |
+| POST | /setup/admin | `{companyName, clientId, username, email?, password, loadSampleData?}`: first company and its administrator |
+| POST | /setup/system-action | `{action: firewall \| autostart}` (Windows, server computer only, during setup) |
+| GET | /setup/clients | `{items[]}` (after setup) |
+| POST | /setup/clients | `{companyName, clientId, username, email?, password}`. Creates the schema, tables and first admin (must change password) |
 | PATCH | /setup/clients/:clientId | `{companyName?, isActive?}`. Deactivating ends that client's sessions and blocks sign-in |

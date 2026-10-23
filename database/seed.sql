@@ -1,55 +1,33 @@
 /*
-  WorkDone Management System - DEVELOPMENT seed data
-  Master data only. No user accounts are created here: create the first
-  administrator with `npm run create-admin` in the backend folder.
-  Do NOT run this against a production database.
+  Q-WorkDone - DEVELOPMENT sample data for one company ("dbo." = its schema).
+  Master data only; no user accounts. Do NOT load this into a real company.
 */
-SET NOCOUNT ON;
-GO
+INSERT INTO dbo.Employees (EmployeeCode, EmployeeName, Department, Phone, Email, JoiningDate) VALUES
+    ('EMP001', 'Amit Sharma', 'Development', '9800000001', 'amit@example.local',  '2022-04-01'),
+    ('EMP002', 'Priya Verma', 'Development', '9800000002', 'priya@example.local', '2023-01-16'),
+    ('EMP003', 'Rahul Gupta', 'Support',     '9800000003', 'rahul@example.local', '2021-07-12'),
+    ('EMP004', 'Neha Singh',  'Testing',     '9800000004', 'neha@example.local',  '2024-02-05'),
+    ('EMP005', 'Vikas Kumar', 'Support',     '9800000005', 'vikas@example.local', '2020-11-23')
+ON CONFLICT (EmployeeCode) DO NOTHING;
 
-MERGE dbo.Employees AS t
-USING (VALUES
-    (N'EMP001', N'Amit Sharma',   N'Development', N'9800000001', N'amit@example.local',   '2022-04-01'),
-    (N'EMP002', N'Priya Verma',   N'Development', N'9800000002', N'priya@example.local',  '2023-01-16'),
-    (N'EMP003', N'Rahul Gupta',   N'Support',     N'9800000003', N'rahul@example.local',  '2021-07-12'),
-    (N'EMP004', N'Neha Singh',    N'Testing',     N'9800000004', N'neha@example.local',   '2024-02-05'),
-    (N'EMP005', N'Vikas Kumar',   N'Support',     N'9800000005', N'vikas@example.local',  '2020-11-23')
-) AS s (EmployeeCode, EmployeeName, Department, Phone, Email, JoiningDate)
-ON t.EmployeeCode = s.EmployeeCode
-WHEN NOT MATCHED THEN
-    INSERT (EmployeeCode, EmployeeName, Department, Phone, Email, JoiningDate)
-    VALUES (s.EmployeeCode, s.EmployeeName, s.Department, s.Phone, s.Email, s.JoiningDate);
-GO
+INSERT INTO dbo.ProductGroups (GroupCode, GroupName, Description) VALUES
+    ('ACC', 'Accounting Software', 'Accounting and billing products'),
+    ('INV', 'Inventory',           'Stock and warehouse products'),
+    ('HR',  'HR & Payroll',        'Human resources and payroll products'),
+    ('WEB', 'Web Services',        'Websites and hosted services')
+ON CONFLICT (GroupCode) DO NOTHING;
 
-MERGE dbo.ProductGroups AS t
-USING (VALUES
-    (N'ACC', N'Accounting Software', N'Accounting and billing products'),
-    (N'INV', N'Inventory',           N'Stock and warehouse products'),
-    (N'HR',  N'HR & Payroll',        N'Human resources and payroll products'),
-    (N'WEB', N'Web Services',        N'Websites and hosted services')
-) AS s (GroupCode, GroupName, Description)
-ON t.GroupCode = s.GroupCode
-WHEN NOT MATCHED THEN
-    INSERT (GroupCode, GroupName, Description) VALUES (s.GroupCode, s.GroupName, s.Description);
-GO
-
-MERGE dbo.Products AS t
-USING (
-    SELECT s.ProductCode, s.ProductName, g.ProductGroupId, s.Description
-    FROM (VALUES
-        (N'ACC-BILL', N'Billing Pro',         N'ACC', N'GST billing application'),
-        (N'ACC-LEDG', N'Ledger Manager',      N'ACC', N'Accounts ledger'),
-        (N'INV-STK',  N'Stock Tracker',       N'INV', N'Inventory management'),
-        (N'INV-WMS',  N'Warehouse Manager',   N'INV', N'Multi-location warehouse'),
-        (N'HR-PAY',   N'Payroll Plus',        N'HR',  N'Payroll processing'),
-        (N'HR-ATT',   N'Attendance System',   N'HR',  N'Biometric attendance'),
-        (N'WEB-SITE', N'Company Website',     N'WEB', N'Corporate websites'),
-        (N'WEB-HOST', N'Hosting & Domains',   N'WEB', N'Hosting support')
-    ) AS s (ProductCode, ProductName, GroupCode, Description)
-    JOIN dbo.ProductGroups g ON g.GroupCode = s.GroupCode
-) AS s
-ON t.ProductCode = s.ProductCode
-WHEN NOT MATCHED THEN
-    INSERT (ProductCode, ProductName, ProductGroupId, Description)
-    VALUES (s.ProductCode, s.ProductName, s.ProductGroupId, s.Description);
-GO
+INSERT INTO dbo.Products (ProductCode, ProductName, ProductGroupId, Description)
+SELECT s.ProductCode, s.ProductName, g.ProductGroupId, s.Description
+FROM (VALUES
+    ('ACC-BILL', 'Billing Pro',       'ACC', 'GST billing application'),
+    ('ACC-LEDG', 'Ledger Manager',    'ACC', 'Accounts ledger'),
+    ('INV-STK',  'Stock Tracker',     'INV', 'Inventory management'),
+    ('INV-WMS',  'Warehouse Manager', 'INV', 'Multi-location warehouse'),
+    ('HR-PAY',   'Payroll Plus',      'HR',  'Payroll processing'),
+    ('HR-ATT',   'Attendance System', 'HR',  'Biometric attendance'),
+    ('WEB-SITE', 'Company Website',   'WEB', 'Corporate websites'),
+    ('WEB-HOST', 'Hosting & Domains', 'WEB', 'Hosting support')
+) AS s (ProductCode, ProductName, GroupCode, Description)
+JOIN dbo.ProductGroups g ON g.GroupCode = s.GroupCode
+ON CONFLICT (ProductCode) DO NOTHING;

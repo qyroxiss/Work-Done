@@ -10,32 +10,32 @@
  * variable for that single command; do not store it in .env or source control.
  * The admin must change the password at first login.
  */
-import { closePool, query, requireDbConfig, runInDatabase, sql } from '../database/pool.js';
+import { closePool, query, runInDatabase, sql } from '../database/pool.js';
 import { logSecurityEvent } from '../services/audit.service.js';
 import { hashPassword } from '../services/auth.service.js';
 import { listClients, normalizeClientId } from '../services/clients.service.js';
 import { passwordRule } from '../validators/common.js';
 import { argValue, ask, askNewPassword, closePrompt } from './prompt.js';
 
-/** Client ID of the chosen client; null before setup has registered the first client. */
+/** Client ID of the chosen client. */
 let clientId: string | null = null;
 
-/** Database of the client given with --client; the main database when there is only one client. */
-async function clientDatabase(): Promise<string> {
+/** Schema of the client given with --client (or of the only client). New companies: use add-client. */
+async function clientSchema(): Promise<string> {
   const wanted = argValue('--client');
-  // The registry does not exist yet before the setup wizard has run
-  const clients = await listClients().catch(() => []);
+  const clients = await listClients();
+  if (clients.length === 0) throw new Error('No company exists yet. Run the setup wizard, or create one with npm run add-client.');
   if (wanted) {
     const client = clients.find((c) => c.clientId === normalizeClientId(wanted));
     if (!client) throw new Error(`Client ID "${wanted}" does not exist.`);
     clientId = client.clientId;
-    return client.databaseName;
+    return client.schemaName;
   }
   if (clients.length > 1) {
     throw new Error(`There are several clients; choose one with --client (${clients.map((c) => c.clientId).join(', ')}).`);
   }
-  clientId = clients[0]?.clientId ?? null;
-  return clients[0]?.databaseName ?? requireDbConfig().database;
+  clientId = clients[0].clientId;
+  return clients[0].schemaName;
 }
 
 async function main() {
@@ -60,9 +60,9 @@ async function main() {
   const hash = await hashPassword(password);
   if (user) {
     await query(
-      `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = 1, IsActive = 1, UpdatedAt = SYSUTCDATETIME()
+      `UPDATE dbo.Users SET PasswordHash = @hash, MustChangePassword = true, IsActive = true, UpdatedAt = now()
        WHERE UserId = @id;
-       UPDATE dbo.Sessions SET RevokedAt = SYSUTCDATETIME() WHERE UserId = @id AND RevokedAt IS NULL;`,
+       UPDATE dbo.Sessions SET RevokedAt = now() WHERE UserId = @id AND RevokedAt IS NULL;`,
       { hash: [sql.NVarChar(255), hash], id: [sql.Int, user.UserId] },
     );
     await logSecurityEvent('PASSWORD_RESET', { userId: user.UserId, username, details: 'Reset via create-admin script' });
@@ -70,7 +70,8 @@ async function main() {
   } else {
     const r = await query(
       `INSERT INTO dbo.Users (ClientId, Username, PasswordHash, Role, MustChangePassword, IsActive)
-       OUTPUT INSERTED.UserId VALUES (@clientId, @u, @hash, N'Admin', 1, 1)`,
+       VALUES (@clientId, @u, @hash, 'Admin', true, true)
+       RETURNING UserId`,
       { clientId: [sql.NVarChar(30), clientId], u: [sql.NVarChar(50), username], hash: [sql.NVarChar(255), hash] },
     );
     await logSecurityEvent('ADMIN_BOOTSTRAP', { userId: r.recordset[0].UserId, username, details: 'Created via create-admin script' });
@@ -78,8 +79,8 @@ async function main() {
   }
 }
 
-clientDatabase()
-  .then((database) => runInDatabase(database, main))
+clientSchema()
+  .then((schema) => runInDatabase(schema, main))
   .catch((err: Error) => {
     console.error('Error:', err.message);
     process.exitCode = 1;

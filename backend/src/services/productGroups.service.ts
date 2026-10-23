@@ -33,7 +33,7 @@ export async function listProductGroups(q: { search?: string; isActive?: boolean
   const where: string[] = [];
   const params: Params = {};
   if (q.search) {
-    where.push('(g.GroupCode LIKE @s OR g.GroupName LIKE @s OR g.Description LIKE @s)');
+    where.push('(g.GroupCode ILIKE @s OR g.GroupName ILIKE @s OR g.Description ILIKE @s)');
     params.s = likeParam(q.search);
   }
   if (q.isActive !== undefined) {
@@ -62,8 +62,8 @@ export async function getProductGroup(id: number) {
 export async function createProductGroup(data: ProductGroupInput) {
   const r = await query(
     `INSERT INTO dbo.ProductGroups (GroupCode, GroupName, Description, IsActive)
-     OUTPUT INSERTED.ProductGroupId
-     VALUES (@code, @name, @desc, @active)`,
+     VALUES (@code, @name, @desc, @active)
+     RETURNING ProductGroupId`,
     inputParams(data),
   );
   return getProductGroup(r.recordset[0].ProductGroupId);
@@ -72,7 +72,7 @@ export async function createProductGroup(data: ProductGroupInput) {
 export async function updateProductGroup(id: number, data: ProductGroupInput) {
   const r = await query(
     `UPDATE dbo.ProductGroups
-     SET GroupCode = @code, GroupName = @name, Description = @desc, IsActive = @active, UpdatedAt = SYSUTCDATETIME()
+     SET GroupCode = @code, GroupName = @name, Description = @desc, IsActive = @active, UpdatedAt = now()
      WHERE ProductGroupId = @id`,
     { ...inputParams(data), id: [sql.Int, id] },
   );

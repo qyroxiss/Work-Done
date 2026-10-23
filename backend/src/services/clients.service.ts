@@ -1,11 +1,12 @@
+import { ensureMainSchema } from '../database/migrate.js';
 import { query, runInDatabase, runInMainDatabase, sql } from '../database/pool.js';
 import { conflict, notFound } from '../utils/httpError.js';
 
-/** A client company and the database that holds its data. Stored in dbo.Clients of the main database. */
+/** A client company and the schema that holds its data. Stored in public.Clients. */
 export interface Client {
   clientId: string;
   companyName: string;
-  databaseName: string;
+  schemaName: string;
   isActive: boolean;
   createdAt: string;
 }
@@ -19,7 +20,7 @@ function mapRow(row: Record<string, unknown>): Client {
   return {
     clientId: row.ClientId as string,
     companyName: row.CompanyName as string,
-    databaseName: row.DatabaseName as string,
+    schemaName: row.SchemaName as string,
     isActive: Boolean(row.IsActive),
     createdAt: (row.CreatedAt as Date).toISOString(),
   };
@@ -27,15 +28,16 @@ function mapRow(row: Record<string, unknown>): Client {
 
 async function load(): Promise<Map<string, Client>> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.byId;
+  await ensureMainSchema(); // a brand-new database gets its shared tables on first use
   const r = await runInMainDatabase(() =>
-    query(`SELECT ClientId, CompanyName, DatabaseName, IsActive, CreatedAt FROM dbo.Clients ORDER BY ClientId`),
+    query(`SELECT ClientId, CompanyName, SchemaName, IsActive, CreatedAt FROM public.Clients ORDER BY ClientId`),
   );
   const byId = new Map(r.recordset.map((row) => [row.ClientId as string, mapRow(row)]));
   cache = { at: Date.now(), byId };
   return byId;
 }
 
-function invalidate() {
+export function invalidateClients() {
   cache = null;
 }
 
@@ -58,30 +60,30 @@ export async function listClients(): Promise<Client[]> {
   return [...(await load()).values()];
 }
 
-/** Adds a client to the registry. Its database must already exist with the WorkDone tables. */
-export async function registerClient(client: { clientId: string; companyName: string; databaseName: string }) {
+/** Adds a client to the registry. Its schema must already exist with the WorkDone tables. */
+export async function registerClient(client: { clientId: string; companyName: string; schemaName: string }) {
   const clientId = normalizeClientId(client.clientId);
-  invalidate();
+  invalidateClients();
   const existing = await runInMainDatabase(() =>
-    query(`SELECT ClientId, DatabaseName FROM dbo.Clients WHERE ClientId = @id OR DatabaseName = @db`, {
+    query(`SELECT ClientId, SchemaName FROM public.Clients WHERE ClientId = @id OR SchemaName = @schema`, {
       id: [sql.NVarChar(30), clientId],
-      db: [sql.NVarChar(128), client.databaseName],
+      schema: [sql.NVarChar(63), client.schemaName],
     }),
   );
   if (existing.recordset.some((r) => r.ClientId === clientId)) throw conflict(`Client ID "${clientId}" is already in use.`);
-  if (existing.recordset.length) throw conflict(`Database ${client.databaseName} already belongs to another client.`);
-  // Users created before the client existed (setup, create-admin, upgraded databases) get its Client ID
-  await runInDatabase(client.databaseName, () =>
+  if (existing.recordset.length) throw conflict(`Schema ${client.schemaName} already belongs to another client.`);
+  // Users created before the client was registered (setup, create-admin) get its Client ID
+  await runInDatabase(client.schemaName, () =>
     query(`UPDATE dbo.Users SET ClientId = @id WHERE ClientId IS NULL`, { id: [sql.NVarChar(30), clientId] }),
   );
   await runInMainDatabase(() =>
-    query(`INSERT INTO dbo.Clients (ClientId, CompanyName, DatabaseName) VALUES (@id, @name, @db)`, {
+    query(`INSERT INTO public.Clients (ClientId, CompanyName, SchemaName) VALUES (@id, @name, @schema)`, {
       id: [sql.NVarChar(30), clientId],
       name: [sql.NVarChar(150), client.companyName],
-      db: [sql.NVarChar(128), client.databaseName],
+      schema: [sql.NVarChar(63), client.schemaName],
     }),
   );
-  invalidate();
+  invalidateClients();
   return getClient(clientId);
 }
 
@@ -89,8 +91,8 @@ export async function updateClient(clientId: string, changes: { companyName?: st
   const client = await getClient(clientId);
   await runInMainDatabase(() =>
     query(
-      `UPDATE dbo.Clients
-       SET CompanyName = ISNULL(@name, CompanyName), IsActive = ISNULL(@active, IsActive), UpdatedAt = SYSUTCDATETIME()
+      `UPDATE public.Clients
+       SET CompanyName = COALESCE(@name, CompanyName), IsActive = COALESCE(@active, IsActive), UpdatedAt = now()
        WHERE ClientId = @id`,
       {
         id: [sql.NVarChar(30), client.clientId],
@@ -99,11 +101,11 @@ export async function updateClient(clientId: string, changes: { companyName?: st
       },
     ),
   );
-  invalidate();
+  invalidateClients();
   return getClient(client.clientId);
 }
 
-/** Suggested database name for a new client, e.g. Client ID "ACME-2" -> WorkDone_ACME_2. */
-export function databaseNameFor(clientId: string): string {
-  return `WorkDone_${normalizeClientId(clientId).replace(/[^A-Z0-9]/g, '_')}`;
+/** Schema for a new client, e.g. Client ID "ACME-2" -> wd_acme_2. */
+export function schemaNameFor(clientId: string): string {
+  return `wd_${normalizeClientId(clientId).toLowerCase().replace(/[^a-z0-9]/g, '_')}`.slice(0, 63);
 }

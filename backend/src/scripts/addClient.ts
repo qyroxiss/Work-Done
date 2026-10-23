@@ -1,15 +1,13 @@
 /**
- * Adds a client company with its own database and first administrator.
+ * Adds a client company with its own tables (schema) and first administrator.
  *
  *   npm run add-client                                              -> prompts for everything
  *   npm run add-client -- --client ACME --name "Acme Pvt Ltd" --username admin [--email a@acme.com]
  *
- * Creating a database needs SQL Server administrator rights: by default the Windows account
- * running this command is used (sqlcmd). To use an SQL login instead, set SETUP_DB_USER and
- * SETUP_DB_PASSWORD for this command. The admin password may be given via ADMIN_PASSWORD.
- * The client's administrator must change the password at first login.
+ * The admin password may be given via ADMIN_PASSWORD for this single command.
+ * The client's administrator must change the password at first sign-in.
  *
- * The same can be done in the browser on the server computer: http://localhost:3000/clients
+ * The same can be done in the browser: /clients on the server computer (or with the setup key).
  */
 import type { z } from 'zod';
 import { closePool } from '../database/pool.js';
@@ -34,15 +32,8 @@ async function main() {
   const password = check(passwordRule, await askNewPassword());
 
   console.log(`\nCreating client ${clientId}...`);
-  const { log } = await createClient({
-    clientId,
-    companyName,
-    admin: { username, email, password },
-    adminLogin: process.env.SETUP_DB_USER
-      ? { user: process.env.SETUP_DB_USER, password: process.env.SETUP_DB_PASSWORD ?? '' }
-      : undefined,
-  });
-  for (const line of log) console.log(`  ✓ ${line}`);
+  const { log } = await createClient({ clientId, companyName, admin: { username, email, password }, mustChangePassword: true });
+  for (const line of log) console.log(`  - ${line}`);
   console.log(`\nDone. Sign in with Client ID "${clientId}" and user "${username}".`);
 }
 

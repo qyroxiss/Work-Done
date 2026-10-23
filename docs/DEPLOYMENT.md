@@ -1,26 +1,30 @@
-# Office LAN Deployment
+# Deployment
 
-## 1. Server machine
+Q-WorkDone is one Node.js server (it serves the built UI and the API on one port) and a PostgreSQL database.
+It can run on an office server on the LAN, or on a cloud host with a hosted database (for example Neon).
 
-Choose one office server / dedicated PC for the backend and SQL Server.
+## 1. Database (PostgreSQL 14 or newer)
 
-- Give it a **static IP or DHCP reservation** (e.g. `192.168.1.10`) and, ideally, a hostname (e.g. `workdone-srv`).
-- Install: Node.js LTS (20 or 22), SQL Server 2019/2022/2025, SSMS.
+The app needs one empty database and a user that owns it (it creates and upgrades its own tables).
 
-## 2. SQL Server configuration
+**On the office server:**
+1. Install PostgreSQL from postgresql.org (keep the default port 5432).
+2. Create a user and a database for the app, e.g. in *SQL Shell (psql)* as `postgres`:
+   ```sql
+   CREATE ROLE workdone LOGIN PASSWORD 'a-long-random-password';
+   CREATE DATABASE workdone OWNER workdone;
+   ```
+3. The connection string is then `postgres://workdone:a-long-random-password@localhost:5432/workdone`
+   (URL-encode special characters in the password, e.g. `@` as `%40`).
+4. If PostgreSQL runs on the same machine as the app, **do not open port 5432 in the firewall**. If they are on
+   different machines, allow 5432 only from the app server's IP (and add it to `pg_hba.conf`).
 
-1. **Enable TCP/IP** — SQL Server Configuration Manager → SQL Server Network Configuration → Protocols for *your instance* → TCP/IP → Enabled. Restart the SQL Server service.
-   The Node.js driver connects over TCP only (shared memory / named pipes are not supported).
-2. For a **named instance** (e.g. `SQL2022`) either keep the *SQL Server Browser* service running and use `DB_SERVER=localhost\SQL2022`, or set a fixed port under *IPAll → TCP Port* (e.g. 1433) and use `DB_SERVER=localhost`, `DB_PORT=1433`.
-3. Enable **SQL Server and Windows Authentication mode** (Server properties → Security) if using a SQL login.
-4. Run `database/create-database.sql` (after changing the password) to create `WorkDoneDB` and the least-privilege `workdone_app` login (db_datareader + db_datawriter only).
-5. Create tables with an owner account: `npm run db:setup` (with `SETUP_DB_USER` / `SETUP_DB_PASSWORD`) or run `schema.sql` + `indexes.sql` in SSMS. **Do not** run `seed.sql` in production.
-6. If the backend runs on the same machine as SQL Server, **do not open port 1433 in the firewall**. If they are on different machines, allow 1433 only from the backend host's IP.
+**Hosted (e.g. Neon):** create a project and database, and copy the connection string from its dashboard (it ends with
+`?sslmode=require`, which turns on TLS). Use the database owner role.
 
-### TLS to SQL Server
-`DB_ENCRYPT=true` is the default. With a self-signed SQL certificate you will see a certificate error; for production install a trusted certificate on SQL Server. `DB_TRUST_SERVER_CERTIFICATE=true` is acceptable only for development or when backend and SQL Server are on the same host.
+Every client company gets its own schema `wd_<clientid>` in this one database; the client registry is `public.Clients`.
 
-## 3. Build and run
+## 2. Build and run
 
 ```powershell
 cd frontend
@@ -30,15 +34,23 @@ npm run build            # -> frontend/dist (served by the backend)
 cd ..\backend
 npm ci
 npm run build            # -> backend/dist
-copy .env.example .env   # set NODE_ENV=production and DB settings
-npm run create-admin -- --username admin
+copy .env.example .env   # set NODE_ENV=production and DATABASE_URL (or leave it empty and use the setup wizard)
 npm start                # serves UI + API on http://<server>:3000
 ```
 
-Users open `http://workdone-srv:3000` (or `http://192.168.1.10:3000`) in their browser.
+Open `http://localhost:3000` on the server: the setup wizard asks for the database (if `DATABASE_URL` is not set) and
+creates the first company and its administrator. Or create it from the command line:
+`npm run add-client -- --client ACME --name "Acme Pvt Ltd" --username admin`.
+
+Users then open `http://workdone-srv:3000` (or `http://192.168.1.10:3000`) in their browser.
+
+### Setup and client management from another computer
+Setup and `/clients` normally work only in a browser on the server itself. On a cloud host, set **`SETUP_KEY`** to a
+long random value; the wizard and the client page then ask for this key. Remove it again when you do not need it.
 
 ### Run as a Windows service
-Use a service wrapper so the app starts at boot and restarts on failure, e.g. [NSSM](https://nssm.cc/):
+The setup wizard can register a scheduled task ("WorkDone Server") that starts the app at boot. Alternatively use a
+service wrapper such as [NSSM](https://nssm.cc/):
 
 ```powershell
 nssm install WorkDone "C:\Program Files\nodejs\node.exe" "D:\WorkDone\backend\dist\server.js"
@@ -47,7 +59,9 @@ nssm set WorkDone AppStdout "D:\WorkDone\logs\workdone.log"
 nssm set WorkDone AppStderr "D:\WorkDone\logs\workdone-error.log"
 nssm start WorkDone
 ```
-(`AppDirectory` must be the backend folder so `.env` is found.) Restrict NTFS permissions on `backend\.env` to administrators and the service account.
+(`AppDirectory` must be the backend folder so `.env` is found.) Restrict NTFS permissions on `backend\.env` to
+administrators and the service account. To remove the scheduled task: `scripts\server-tools.ps1 -Action RemoveAutostart`
+in an elevated PowerShell.
 
 ### Firewall
 Allow inbound TCP on the app port (3000, or 443 with HTTPS) **from the office subnet only**:
@@ -55,7 +69,7 @@ Allow inbound TCP on the app port (3000, or 443 with HTTPS) **from the office su
 New-NetFirewallRule -DisplayName "WorkDone" -Direction Inbound -Protocol TCP -LocalPort 3000 -RemoteAddress 192.168.1.0/24 -Action Allow
 ```
 
-## 4. HTTPS (recommended even internally)
+## 3. HTTPS (recommended even internally)
 
 Option A — let Node serve TLS directly: obtain a certificate for the server hostname (internal CA or self-signed distributed to office PCs), then in `.env`:
 ```
@@ -70,37 +84,41 @@ When HTTPS is enabled, `COOKIE_SECURE=true` must be set so the session cookie is
 
 HTTPS also lets office PCs **install Q-WorkDone as an app** (Chrome/Edge: the install icon in the address bar), with its own window and taskbar icon. Browsers allow this only over HTTPS, or on the server computer itself at `http://localhost:3000`.
 
-## 5. Backups
+## 4. Backups
 
-- Schedule SQL Server backups (SQL Agent job or Maintenance Plan), for example: **full daily, transaction log hourly** (requires FULL recovery model) — choose based on how much work you can afford to lose.
-  ```sql
-  BACKUP DATABASE WorkDoneDB TO DISK = N'E:\Backups\WorkDoneDB_full.bak' WITH COMPRESSION, CHECKSUM, INIT;
+- Back up the **whole database** (all client schemas at once) every day with `pg_dump`, for example as a Windows scheduled task:
+  ```powershell
+  $env:PGPASSWORD = '...'   # or use a pgpass.conf file
+  & "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe" -h localhost -U workdone -d workdone -F c -f "E:\Backups\workdone_$(Get-Date -Format yyyyMMdd).dump"
   ```
-- With several client companies, include **every** client database (`WorkDoneDB` plus each `WorkDone_<CLIENTID>`) in the backup job — new clients are not added to an existing job automatically.
-- Copy backups to a **second location** (NAS / external disk / cloud) — not only the DB server.
+  Hosted databases such as Neon keep their own point-in-time history; still export a copy regularly.
+- Work files and chat files are stored in the database, so the dump contains them too (and grows with them).
+- Copy backups to a **second location** (NAS / external disk / cloud) — not only the database server.
 - **Test restores** regularly into a separate database:
-  ```sql
-  RESTORE DATABASE WorkDoneDB_RestoreTest FROM DISK = N'E:\Backups\WorkDoneDB_full.bak'
-    WITH MOVE 'WorkDoneDB' TO N'E:\Restore\WorkDoneDB_RestoreTest.mdf',
-         MOVE 'WorkDoneDB_log' TO N'E:\Restore\WorkDoneDB_RestoreTest_log.ldf';
+  ```powershell
+  & "C:\Program Files\PostgreSQL\18\bin\createdb.exe" -h localhost -U workdone workdone_restore_test
+  & "C:\Program Files\PostgreSQL\18\bin\pg_restore.exe" -h localhost -U workdone -d workdone_restore_test "E:\Backups\workdone_20261023.dump"
   ```
-- Back up `backend\.env` securely (it holds the DB password).
+- Back up `backend\.env` securely (it holds the database password).
 
-## 6. Maintenance
+## 5. Maintenance
 
-- Monitor: application logs, `/api/health`, SQL Server disk space and DB size, failed logins (`SecurityEvents` table, `EventType = 'LOGIN_FAILED'`).
+- Monitor: application logs, `/api/health`, database size, failed logins (`SecurityEvents` in each client schema, `EventType = 'LOGIN_FAILED'`).
 - Sessions older than 7 days after expiry are purged automatically. Define a retention period for `SecurityEvents` (e.g. delete rows older than 1 year).
-- Keep Node.js, npm dependencies (`npm audit`), Windows and SQL Server patched.
-- Schema changes: add new numbered scripts in `database/migrations/` (e.g. `002_add_column.sql`), test on a copy first, back up before applying.
+- Keep Node.js, npm dependencies (`npm audit`), the operating system and PostgreSQL patched.
+- Schema changes: edit `database/client.sql` idempotently (`CREATE ... IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`) and raise
+  `SCHEMA_VERSION` in `backend/src/database/migrate.ts`; every company is upgraded at the next start. Test on a copy first, back up before deploying.
 
 ### Useful security queries
 ```sql
--- Recent failed logins
-SELECT TOP 50 * FROM dbo.SecurityEvents WHERE EventType = 'LOGIN_FAILED' ORDER BY CreatedAt DESC;
--- Sign everyone out (e.g. after a security incident)
-UPDATE dbo.Sessions SET RevokedAt = SYSUTCDATETIME() WHERE RevokedAt IS NULL;
+-- Recent failed logins of one company
+SELECT * FROM wd_acme.SecurityEvents WHERE EventType = 'LOGIN_FAILED' ORDER BY CreatedAt DESC LIMIT 50;
+-- Sign everyone of that company out (e.g. after a security incident)
+UPDATE wd_acme.Sessions SET RevokedAt = now() WHERE RevokedAt IS NULL;
 ```
 
-## 7. Future online migration
+## 6. Moving from the SQL Server version
 
-The frontend and backend are already decoupled and configured through environment variables (no hardcoded IPs). Before going online: host on a secured server, use a domain + HTTPS (`COOKIE_SECURE=true`), keep SQL Server off the public internet (private network / firewall to the app host only), store secrets in the host's secret manager, set up automated backups and monitoring, and consider VPN-only access if the app should remain private. Test data migration and rollback first.
+Earlier versions used SQL Server. `npm run import:sqlserver` (in `backend`) copies every company — work, history,
+files, chat, notifications, with the same ids — into PostgreSQL. It reads the old `DB_SERVER`, `DB_USER`, `DB_PASSWORD`
+and `DB_DATABASE` settings from `backend/.env` and writes to `DATABASE_URL`; SQL Server is only read. See the README.

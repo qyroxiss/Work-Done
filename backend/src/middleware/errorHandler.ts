@@ -2,6 +2,16 @@ import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { ZodError } from 'zod';
 import { HttpError } from '../utils/httpError.js';
 
+/** Network failures, refused/failed sign-in to PostgreSQL, server shutting down or out of connections. */
+export function isDatabaseUnavailable(err: { code?: string; message?: string } | null | undefined): boolean {
+  const code = err?.code ?? '';
+  return (
+    ['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH'].includes(code) ||
+    /^(08|28|3D|53|57P)/.test(code) ||
+    /timeout exceeded when trying to connect|Connection terminated/i.test(err?.message ?? '')
+  );
+}
+
 export const apiNotFound: RequestHandler = (_req, res) => {
   res.status(404).json({ error: 'API endpoint not found.', code: 'NOT_FOUND' });
 };
@@ -38,19 +48,18 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
     return;
   }
 
-  // SQL Server constraint violations
-  const sqlNumber: number | undefined = err?.number ?? err?.originalError?.info?.number;
-  if (sqlNumber === 2627 || sqlNumber === 2601) {
+  // PostgreSQL constraint violations (SQLSTATE codes)
+  if (err?.code === '23505') {
     res.status(409).json({ error: 'A record with the same code or name already exists.', code: 'DUPLICATE' });
     return;
   }
-  if (sqlNumber === 547) {
+  if (err?.code === '23503' || err?.code === '23514') {
     res.status(400).json({ error: 'The operation conflicts with related records.', code: 'CONSTRAINT' });
     return;
   }
 
   console.error(`[error] ${req.method} ${req.originalUrl}:`, err);
-  const dbDown = err?.code === 'ESOCKET' || err?.code === 'ELOGIN' || err?.code === 'ETIMEOUT' || err?.name === 'ConnectionError';
+  const dbDown = isDatabaseUnavailable(err);
   res.status(dbDown ? 503 : 500).json({
     error: dbDown
       ? 'The database is currently unavailable. Please try again shortly.'

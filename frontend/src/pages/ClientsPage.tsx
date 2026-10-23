@@ -1,42 +1,40 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { Alert, Button, Divider, Group, List, PasswordInput, Radio, SimpleGrid, Stack, Table, Text, TextInput } from '@mantine/core';
+import { Alert, Button, Divider, Group, List, PasswordInput, SimpleGrid, Stack, Table, Text, TextInput } from '@mantine/core';
 import { CheckCircle2 } from 'lucide-react';
 import { AuthLayout } from '../components/AuthLayout';
 import { ActiveBadge, Spinner } from '../components/common';
-import { api, ApiError, errorMessage } from '../services/api';
+import { api, ApiError, errorMessage, setSetupKey } from '../services/api';
 import { formatDateTime } from '../utils/format';
 
 interface Client {
   clientId: string;
   companyName: string;
-  databaseName: string;
+  schemaName: string;
   isActive: boolean;
   createdAt: string;
 }
 
-interface ClientsResponse {
-  items: Client[];
-  sqlcmdAvailable: boolean;
-}
-
-const EMPTY_FORM = { companyName: '', clientId: '', username: 'admin', email: '', password: '', confirm: '', sqlUser: 'sa', sqlPassword: '' };
+const EMPTY_FORM = { companyName: '', clientId: '', username: 'admin', email: '', password: '', confirm: '' };
 
 /**
- * Client companies hosted on this server, each with its own database.
- * Opened on the server computer itself (http://localhost:3000/clients); the API refuses other computers.
+ * Client companies hosted by this installation, each with its own tables.
+ * Available on the server computer itself, or from anywhere with the setup key (SETUP_KEY).
  */
 export function ClientsPage() {
-  const [data, setData] = useState<ClientsResponse | null>(null);
+  const [items, setItems] = useState<Client[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [needsKey, setNeedsKey] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      setData(await api.get<ClientsResponse>('/setup/clients'));
+      setItems((await api.get<{ items: Client[] }>('/setup/clients')).items);
       setLoadError(null);
+      setNeedsKey(false);
     } catch (err) {
-      setLoadError(errorMessage(err));
+      if (err instanceof ApiError && err.status === 403 && /setup key/i.test(err.message)) setNeedsKey(true);
+      else setLoadError(errorMessage(err));
     }
   }, []);
 
@@ -59,9 +57,9 @@ export function ClientsPage() {
 
   return (
     <AuthLayout
-      eyebrow="Server computer"
+      eyebrow="Service provider"
       title="Client companies"
-      subtitle="Each client signs in with its own Client ID and has a separate database."
+      subtitle="Each client signs in with its own Client ID; its data is kept separate from every other client."
       width={860}
       note={
         <Button variant="subtle" color="gray" size="compact-sm" onClick={() => window.location.replace('/')}>
@@ -69,11 +67,13 @@ export function ClientsPage() {
         </Button>
       }
     >
-      {loadError ? (
+      {needsKey ? (
+        <SetupKeyForm onSaved={load} />
+      ) : loadError ? (
         <Alert color="red" variant="light" radius="lg">
           {loadError}
         </Alert>
-      ) : !data ? (
+      ) : !items ? (
         <Spinner label="Loading clients…" />
       ) : (
         <>
@@ -87,14 +87,14 @@ export function ClientsPage() {
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Company</Table.Th>
-                  <Table.Th>Database</Table.Th>
+                  <Table.Th>Data</Table.Th>
                   <Table.Th>Created</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th />
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {data.items.map((c) => (
+                {items.map((c) => (
                   <Table.Tr key={c.clientId}>
                     <Table.Td>
                       <Text fw={500}>{c.companyName}</Text>
@@ -103,8 +103,8 @@ export function ClientsPage() {
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <Text className="wd-mono" size="xs" c="dimmed">
-                        {c.databaseName}
+                      <Text className="wd-mono" size="xs" c="dimmed" title="PostgreSQL schema">
+                        {c.schemaName}
                       </Text>
                     </Table.Td>
                     <Table.Td>
@@ -119,7 +119,6 @@ export function ClientsPage() {
                       <Button
                         size="xs"
                         className="wd-soft"
-                        color={c.isActive ? 'red' : undefined}
                         disabled={busyId !== null && busyId !== c.clientId}
                         loading={busyId === c.clientId}
                         onClick={() => void toggle(c)}
@@ -133,16 +132,41 @@ export function ClientsPage() {
             </Table>
           </Table.ScrollContainer>
           <Divider my="xs" />
-          <AddClientForm sqlcmdAvailable={data.sqlcmdAvailable} onAdded={load} />
+          <AddClientForm onAdded={load} />
         </>
       )}
     </AuthLayout>
   );
 }
 
-function AddClientForm({ sqlcmdAvailable, onAdded }: { sqlcmdAvailable: boolean; onAdded: () => Promise<void> }) {
+function SetupKeyForm({ onSaved }: { onSaved: () => Promise<void> }) {
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        setSetupKey(key.trim());
+        await onSaved();
+        setBusy(false);
+      }}
+    >
+      <Stack gap="md">
+        <Text c="dimmed">Enter the setup key (the SETUP_KEY value in the server settings) to manage client companies from this computer.</Text>
+        <PasswordInput label="Setup key" required value={key} onChange={(e) => setKey(e.currentTarget.value)} autoComplete="off" data-autofocus />
+        <Group justify="flex-end">
+          <Button type="submit" className="wd-ink" loading={busy} disabled={!key.trim()}>
+            Continue
+          </Button>
+        </Group>
+      </Stack>
+    </form>
+  );
+}
+
+function AddClientForm({ onAdded }: { onAdded: () => Promise<void> }) {
   const [form, setForm] = useState(EMPTY_FORM);
-  const [useSqlLogin, setUseSqlLogin] = useState(!sqlcmdAvailable);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [log, setLog] = useState<string[]>([]);
@@ -172,7 +196,6 @@ function AddClientForm({ sqlcmdAvailable, onAdded }: { sqlcmdAvailable: boolean;
         username: form.username.trim(),
         email: form.email.trim(),
         password: form.password,
-        ...(useSqlLogin ? { sqlUser: form.sqlUser.trim(), sqlPassword: form.sqlPassword } : {}),
       });
       setLog(r.log);
       setForm(EMPTY_FORM);
@@ -230,30 +253,11 @@ function AddClientForm({ sqlcmdAvailable, onAdded }: { sqlcmdAvailable: boolean;
           />
           <PasswordInput label="Confirm password" required error={errors.confirm} value={form.confirm} onChange={(e) => set('confirm')(e.currentTarget.value)} autoComplete="new-password" />
         </SimpleGrid>
-
-        <Radio.Group label="Create the database as SQL Server administrator" value={useSqlLogin ? 'sql' : 'windows'} onChange={(v) => setUseSqlLogin(v === 'sql')}>
-          <Stack gap={8} mt={8}>
-            <Radio value="windows" disabled={!sqlcmdAvailable} label={`My Windows account${sqlcmdAvailable ? '' : ' (needs sqlcmd, not found)'}`} />
-            <Radio value="sql" label="SQL Server login (e.g. sa)" />
-          </Stack>
-        </Radio.Group>
-        {useSqlLogin && (
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-            <TextInput label="Login" value={form.sqlUser} onChange={(e) => set('sqlUser')(e.currentTarget.value)} autoComplete="off" />
-            <PasswordInput label="Password" value={form.sqlPassword} onChange={(e) => set('sqlPassword')(e.currentTarget.value)} autoComplete="off" />
-          </SimpleGrid>
-        )}
-
         <Group justify="flex-end">
           <Button type="submit" className="wd-ink" loading={busy}>
             Create client
           </Button>
         </Group>
-        {busy && (
-          <Text size="sm" c="dimmed" ta="right">
-            Creating the database. This can take a minute.
-          </Text>
-        )}
       </Stack>
     </form>
   );

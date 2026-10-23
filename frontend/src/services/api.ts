@@ -26,8 +26,29 @@ interface RawBody {
   headers: Record<string, string>;
 }
 
+const SETUP_KEY_STORAGE = 'wd-setup-key';
+
+/** Setup key entered on this tab (lets setup run from a computer other than the server). */
+export function getSetupKey(): string | null {
+  try {
+    return sessionStorage.getItem(SETUP_KEY_STORAGE);
+  } catch {
+    return null;
+  }
+}
+
+export function setSetupKey(key: string | null) {
+  try {
+    if (key) sessionStorage.setItem(SETUP_KEY_STORAGE, key);
+    else sessionStorage.removeItem(SETUP_KEY_STORAGE);
+  } catch {
+    /* storage unavailable: the key has to be entered again */
+  }
+}
+
 async function request<T>(method: string, url: string, body?: unknown, raw?: RawBody): Promise<T> {
   let res: Response;
+  const setupKey = url.startsWith('/setup') ? getSetupKey() : null;
   try {
     res = await fetch(`/api${url}`, {
       method,
@@ -35,6 +56,7 @@ async function request<T>(method: string, url: string, body?: unknown, raw?: Raw
       headers: {
         Accept: 'application/json',
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...(setupKey ? { 'X-Setup-Key': setupKey } : {}),
         ...raw?.headers,
         // Required by the server's CSRF guard on state-changing requests
         'X-Requested-With': 'WorkDone',

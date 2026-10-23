@@ -1,5 +1,4 @@
-import type sqlTypes from 'mssql';
-import { query, recordsets, sql, withTransaction, type Params, type Row } from '../database/pool.js';
+import { query, recordsets, sql, withTransaction, type Params, type Row, type Tx } from '../database/pool.js';
 import type { AuthUser, Paged, Priority, WorkStatus } from '../types/domain.js';
 import {
   localDayEndExclusive,
@@ -29,15 +28,18 @@ import {
 } from './notifications.service.js';
 import { allowedTransitions, isManager, NOTES_REQUIRED } from './workflow.js';
 
-type Tx = sqlTypes.Transaction;
+/** The RowVer column as the 16-hex-digit token clients send back to prove they saw the latest version. */
+function rowVersionToken(value: unknown): string {
+  return BigInt(value as number).toString(16).padStart(16, '0');
+}
 
 const CONCURRENCY_MESSAGE =
   'This work item was changed by someone else since you opened it. Reload it and try again.';
 
-/** SQL expression: 1 when a work item is past its due date and not yet completed/closed. */
-const OVERDUE_SQL = `CASE WHEN w.DueDate < @today AND w.Status NOT IN (N'Completed', N'Closed') THEN 1 ELSE 0 END`;
+/** SQL condition: the work item is past its due date and not yet completed/closed. */
+const OVERDUE_SQL = `(w.DueDate < @today AND w.Status NOT IN ('Completed', 'Closed'))`;
 
-const PRIORITY_RANK_SQL = `CASE w.Priority WHEN N'Urgent' THEN 4 WHEN N'High' THEN 3 WHEN N'Medium' THEN 2 ELSE 1 END`;
+const PRIORITY_RANK_SQL = `CASE w.Priority WHEN 'Urgent' THEN 4 WHEN 'High' THEN 3 WHEN 'Medium' THEN 2 ELSE 1 END`;
 
 const SORT_COLUMNS: Record<WorkListQuery['sortBy'], string> = {
   workNo: 'w.WorkId',
@@ -99,7 +101,7 @@ export async function attachAssignees<T extends { workId: number; assignees: Ass
     `SELECT wa.WorkId, e.EmployeeId, e.EmployeeCode, e.EmployeeName
      FROM dbo.WorkAssignments wa
      JOIN dbo.Employees e ON e.EmployeeId = wa.EmployeeId
-     WHERE wa.IsActive = 1 AND wa.WorkId IN (${ids})
+     WHERE wa.IsActive AND wa.WorkId IN (${ids})
      ORDER BY e.EmployeeName`,
     params,
   );
@@ -118,7 +120,7 @@ function scopeToUser(user: AuthUser, where: string[], params: Params): boolean {
   if (isManager(user.role)) return true;
   if (!user.employeeId) return false;
   where.push(`EXISTS (SELECT 1 FROM dbo.WorkAssignments sa
-                      WHERE sa.WorkId = w.WorkId AND sa.IsActive = 1 AND sa.EmployeeId = @scopeEmployeeId)`);
+                      WHERE sa.WorkId = w.WorkId AND sa.IsActive AND sa.EmployeeId = @scopeEmployeeId)`);
   params.scopeEmployeeId = [sql.Int, user.employeeId];
   return true;
 }
@@ -130,7 +132,7 @@ export async function listWorkItems(q: WorkListQuery, user: AuthUser): Promise<P
   if (!scopeToUser(user, where, params)) return { items: [], total: 0, page: q.page, pageSize: q.pageSize };
 
   if (q.search) {
-    where.push('(w.WorkNo LIKE @search OR w.Title LIKE @search OR w.Description LIKE @search)');
+    where.push('(w.WorkNo ILIKE @search OR w.Title ILIKE @search OR w.Description ILIKE @search)');
     params.search = likeParam(q.search);
   }
   if (q.status?.length) {
@@ -150,15 +152,15 @@ export async function listWorkItems(q: WorkListQuery, user: AuthUser): Promise<P
   }
   if (q.employeeId) {
     where.push(`EXISTS (SELECT 1 FROM dbo.WorkAssignments fa
-                        WHERE fa.WorkId = w.WorkId AND fa.IsActive = 1 AND fa.EmployeeId = @employeeId)`);
+                        WHERE fa.WorkId = w.WorkId AND fa.IsActive AND fa.EmployeeId = @employeeId)`);
     params.employeeId = [sql.Int, q.employeeId];
   }
   if (q.assignment) {
-    const exists = `EXISTS (SELECT 1 FROM dbo.WorkAssignments xa WHERE xa.WorkId = w.WorkId AND xa.IsActive = 1)`;
+    const exists = `EXISTS (SELECT 1 FROM dbo.WorkAssignments xa WHERE xa.WorkId = w.WorkId AND xa.IsActive)`;
     where.push(q.assignment === 'assigned' ? exists : `NOT ${exists}`);
   }
   if (q.overdue) {
-    where.push(`${OVERDUE_SQL} = 1`);
+    where.push(OVERDUE_SQL);
   }
   if (q.fromDate || q.toDate) {
     if (q.dateField === 'created') {
@@ -186,16 +188,14 @@ export async function listWorkItems(q: WorkListQuery, user: AuthUser): Promise<P
 
   const w = whereClause(where);
   const dir = q.sortDir === 'asc' ? 'ASC' : 'DESC';
-  // NULL dates sort last regardless of direction
+  // Empty dates / products sort last in both directions
   const sortCol = SORT_COLUMNS[q.sortBy];
-  const nullsLast = ['startDate', 'dueDate', 'product'].includes(q.sortBy)
-    ? `CASE WHEN ${sortCol} IS NULL THEN 1 ELSE 0 END, `
-    : '';
+  const nullsLast = ['startDate', 'dueDate', 'product'].includes(q.sortBy) ? ' NULLS LAST' : '';
 
   const result = await query(
     `SELECT COUNT(*) AS Total FROM ${LIST_FROM} ${w};
      SELECT ${LIST_COLUMNS} FROM ${LIST_FROM} ${w}
-     ORDER BY ${nullsLast}${sortCol} ${dir}, w.WorkId DESC
+     ORDER BY ${sortCol} ${dir}${nullsLast}, w.WorkId DESC
      OFFSET @pgOffset ROWS FETCH NEXT @pgSize ROWS ONLY;`,
     { ...params, pgOffset: [sql.Int, (q.page - 1) * q.pageSize], pgSize: [sql.Int, q.pageSize] },
   );
@@ -207,7 +207,7 @@ export async function listWorkItems(q: WorkListQuery, user: AuthUser): Promise<P
 async function isAssigned(workId: number, employeeId: number | null, tx?: Tx): Promise<boolean> {
   if (!employeeId) return false;
   const r = await query(
-    `SELECT 1 AS Ok FROM dbo.WorkAssignments WHERE WorkId = @workId AND EmployeeId = @emp AND IsActive = 1`,
+    `SELECT 1 AS Ok FROM dbo.WorkAssignments WHERE WorkId = @workId AND EmployeeId = @emp AND IsActive`,
     { workId: [sql.Int, workId], emp: [sql.Int, employeeId] },
     tx,
   );
@@ -239,7 +239,7 @@ export async function getWorkItem(workId: number, user: AuthUser) {
      JOIN dbo.Employees e ON e.EmployeeId = wa.EmployeeId
      JOIN dbo.Users au ON au.UserId = wa.AssignedByUserId
      LEFT JOIN dbo.Employees ae ON ae.EmployeeId = au.EmployeeId
-     WHERE wa.WorkId = @id AND wa.IsActive = 1
+     WHERE wa.WorkId = @id AND wa.IsActive
      ORDER BY e.EmployeeName;
 
      SELECT h.HistoryId, h.EntryType, h.OldStatus, h.NewStatus, h.Notes, h.ChangedAt,
@@ -268,7 +268,7 @@ export async function getWorkItem(workId: number, user: AuthUser) {
   return {
     ...base,
     description: row.Description as string | null,
-    rowVersion: (row.RowVer as Buffer).toString('hex'),
+    rowVersion: rowVersionToken(row.RowVer),
     createdByUserId: row.CreatedByUserId as number,
     createdByName: (row.CreatedByName ?? row.CreatedByUsername) as string,
     assignees: assignmentRows.map(
@@ -386,9 +386,10 @@ async function syncAssignments(
 ): Promise<number[]> {
   const current = await query(
     `SELECT wa.EmployeeId, e.EmployeeName
-     FROM dbo.WorkAssignments wa WITH (UPDLOCK, HOLDLOCK)
+     FROM dbo.WorkAssignments wa
      JOIN dbo.Employees e ON e.EmployeeId = wa.EmployeeId
-     WHERE wa.WorkId = @workId AND wa.IsActive = 1`,
+     WHERE wa.WorkId = @workId AND wa.IsActive
+     FOR UPDATE OF wa`,
     { workId: [sql.Int, workId] },
     tx,
   );
@@ -419,8 +420,8 @@ async function syncAssignments(
   for (const employeeId of toRemove) {
     await query(
       `UPDATE dbo.WorkAssignments
-       SET IsActive = 0, UnassignedAt = SYSUTCDATETIME(), UnassignedByUserId = @userId
-       WHERE WorkId = @workId AND EmployeeId = @emp AND IsActive = 1`,
+       SET IsActive = false, UnassignedAt = now(), UnassignedByUserId = @userId
+       WHERE WorkId = @workId AND EmployeeId = @emp AND IsActive`,
       { workId: [sql.Int, workId], emp: [sql.Int, employeeId], userId: [sql.Int, userId] },
       tx,
     );
@@ -444,7 +445,7 @@ async function syncAssignments(
     userId,
     notes: parts.join('; '),
   });
-  await query(`UPDATE dbo.WorkItems SET UpdatedAt = SYSUTCDATETIME() WHERE WorkId = @workId`, {
+  await query(`UPDATE dbo.WorkItems SET UpdatedAt = now() WHERE WorkId = @workId`, {
     workId: [sql.Int, workId],
   }, tx);
   return toAdd;
@@ -476,8 +477,8 @@ export async function insertWorkItem(
   const groupId = await resolveProductGroup(tx, data.productId, data.productGroupId, current);
   const r = await query(
     `INSERT INTO dbo.WorkItems (Title, Description, ProductGroupId, ProductId, Priority, Status, StartDate, DueDate, CreatedByUserId, RecurringId)
-     OUTPUT INSERTED.WorkId
-     VALUES (@title, @description, @groupId, @productId, @priority, N'Pending', @startDate, @dueDate, @userId, @recurringId)`,
+     VALUES (@title, @description, @groupId, @productId, @priority, 'Pending', @startDate, @dueDate, @userId, @recurringId)
+     RETURNING WorkId`,
     { ...workParams(data, groupId), userId: [sql.Int, createdByUserId], recurringId: [sql.Int, options.recurringId ?? null] },
     tx,
   );
@@ -521,7 +522,8 @@ export async function createWorkItem(data: CreateWorkInput, user: AuthUser) {
 async function lockWorkItem(tx: Tx, workId: number, rowVersion?: string) {
   const r = await query(
     `SELECT WorkId, Status, ProductId, ProductGroupId, RowVer
-     FROM dbo.WorkItems WITH (UPDLOCK, ROWLOCK) WHERE WorkId = @id`,
+     FROM dbo.WorkItems WHERE WorkId = @id
+     FOR UPDATE`,
     { id: [sql.Int, workId] },
     tx,
   );
@@ -531,7 +533,7 @@ async function lockWorkItem(tx: Tx, workId: number, rowVersion?: string) {
     status: row.Status as WorkStatus,
     productId: row.ProductId as number | null,
     productGroupId: row.ProductGroupId as number | null,
-    rowVersion: (row.RowVer as Buffer).toString('hex'),
+    rowVersion: rowVersionToken(row.RowVer),
   };
   if (rowVersion !== undefined) assertVersion(current, rowVersion);
   return current;
@@ -550,7 +552,7 @@ export async function updateWorkItem(workId: number, data: UpdateWorkInput, user
     await query(
       `UPDATE dbo.WorkItems
        SET Title = @title, Description = @description, ProductGroupId = @groupId, ProductId = @productId,
-           Priority = @priority, StartDate = @startDate, DueDate = @dueDate, UpdatedAt = SYSUTCDATETIME()
+           Priority = @priority, StartDate = @startDate, DueDate = @dueDate, UpdatedAt = now()
        WHERE WorkId = @id`,
       { ...workParams(data, groupId), id: [sql.Int, workId] },
       tx,
@@ -599,9 +601,9 @@ export async function changeStatus(workId: number, data: StatusInput, user: Auth
 
     await query(
       `UPDATE dbo.WorkItems
-       SET Status = @status, UpdatedAt = SYSUTCDATETIME(),
-           ClosedAt = CASE WHEN @status = N'Closed' THEN SYSUTCDATETIME()
-                           WHEN @status = N'Reopened' THEN NULL ELSE ClosedAt END
+       SET Status = @status, UpdatedAt = now(),
+           ClosedAt = CASE WHEN @status = 'Closed' THEN now()
+                           WHEN @status = 'Reopened' THEN NULL ELSE ClosedAt END
        WHERE WorkId = @id`,
       { status: [sql.NVarChar(20), data.status], id: [sql.Int, workId] },
       tx,
@@ -659,7 +661,7 @@ export async function addNote(workId: number, notes: string, user: AuthUser) {
       userId: user.userId,
       notes,
     });
-    await query(`UPDATE dbo.WorkItems SET UpdatedAt = SYSUTCDATETIME() WHERE WorkId = @id`, {
+    await query(`UPDATE dbo.WorkItems SET UpdatedAt = now() WHERE WorkId = @id`, {
       id: [sql.Int, workId],
     }, tx);
   });
@@ -688,10 +690,11 @@ export async function addAttachment(workId: number, file: NewAttachment, user: A
     if (current.status === 'Closed') throw badRequest('Closed work cannot get new files. Reopen it first.');
     const r = await query(
       `INSERT INTO dbo.WorkAttachments (WorkId, FileName, ContentType, SizeBytes, Content, UploadedByUserId)
-       OUTPUT INSERTED.AttachmentId
-       VALUES (@workId, @name, @type, DATALENGTH(@content), @content, @userId)`,
+       VALUES (@workId, @name, @type, @size, @content, @userId)
+       RETURNING AttachmentId`,
       {
         workId: [sql.Int, workId],
+        size: [sql.Int, file.content.length],
         name: [sql.NVarChar(255), file.fileName],
         type: [sql.NVarChar(100), file.contentType],
         content: [sql.VarBinary(sql.MAX), file.content],
@@ -707,7 +710,7 @@ export async function addAttachment(workId: number, file: NewAttachment, user: A
       userId: user.userId,
       notes: `Attached ${file.fileName}`,
     });
-    await query(`UPDATE dbo.WorkItems SET UpdatedAt = SYSUTCDATETIME() WHERE WorkId = @id`, { id: [sql.Int, workId] }, tx);
+    await query(`UPDATE dbo.WorkItems SET UpdatedAt = now() WHERE WorkId = @id`, { id: [sql.Int, workId] }, tx);
     return r.recordset[0].AttachmentId as number;
   });
   quietly(
@@ -754,7 +757,7 @@ export async function removeAttachment(attachmentId: number, user: AuthUser) {
     if (current.status === 'Closed') throw badRequest('Files of closed work cannot be removed. Reopen it first.');
     if (!isManager(user.role) && row.UploadedByUserId !== user.userId) throw forbidden('You can only remove files you added.');
     await query(
-      `UPDATE dbo.WorkAttachments SET Content = NULL, DeletedAt = SYSUTCDATETIME(), DeletedByUserId = @userId WHERE AttachmentId = @aid`,
+      `UPDATE dbo.WorkAttachments SET Content = NULL, DeletedAt = now(), DeletedByUserId = @userId WHERE AttachmentId = @aid`,
       { aid: [sql.Int, attachmentId], userId: [sql.Int, user.userId] },
       tx,
     );

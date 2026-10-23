@@ -39,23 +39,10 @@ function build(env: Env) {
   const isProd = nodeEnv === 'production';
 
   // The database section is null until setup has been completed ("setup mode").
-  const rawServer = get('DB_SERVER');
-  const dbUser = get('DB_USER');
-  const dbPassword = get('DB_PASSWORD');
-  let db: DbConfig | null = null;
-  if (rawServer && dbUser && dbPassword !== undefined) {
-    const [host, instance] = rawServer.split('\\');
-    db = {
-      server: host,
-      instanceName: instance || undefined,
-      port: get('DB_PORT') ? int('DB_PORT', 1433) : undefined,
-      database: get('DB_DATABASE') ?? 'WorkDoneDB',
-      user: dbUser,
-      password: dbPassword,
-      encrypt: bool('DB_ENCRYPT', true),
-      trustServerCertificate: bool('DB_TRUST_SERVER_CERTIFICATE', false),
-    };
-  }
+  // DATABASE_URL is a PostgreSQL connection string, e.g. postgres://user:pass@host:5432/workdone
+  // (hosted databases such as Neon add ?sslmode=require).
+  const url = get('DATABASE_URL');
+  const db: DbConfig | null = url ? { url, poolSize: int('DB_POOL_SIZE', 10) } : null;
 
   const keyPath = get('HTTPS_KEY_PATH');
   const certPath = get('HTTPS_CERT_PATH');
@@ -73,18 +60,19 @@ function build(env: Env) {
       cookieSecure: bool('COOKIE_SECURE', isProd),
     },
     https: keyPath && certPath ? { keyPath, certPath } : undefined,
+    /**
+     * Lets setup and client management be done from another computer by entering this key
+     * (needed on cloud hosts, where nobody uses "the server computer"). Unset = server computer only.
+     */
+    setupKey: get('SETUP_KEY'),
   };
 }
 
 export interface DbConfig {
-  server: string;
-  instanceName?: string;
-  port?: number;
-  database: string;
-  user: string;
-  password: string;
-  encrypt: boolean;
-  trustServerCertificate: boolean;
+  /** PostgreSQL connection string */
+  url: string;
+  /** Connections kept open by this server process */
+  poolSize: number;
 }
 
 export type AppConfig = ReturnType<typeof build>;

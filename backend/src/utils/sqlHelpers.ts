@@ -1,9 +1,12 @@
 import { query, recordsets, sql, type Params, type Row, type SqlType } from '../database/pool.js';
 import type { Paged } from '../types/domain.js';
 
-/** Escapes LIKE wildcards in user input and wraps it for a "contains" search. */
+/**
+ * Escapes LIKE wildcards in user input and wraps it for a "contains" search.
+ * Use with ILIKE, so searches ignore case (as users expect).
+ */
 export function likeParam(term: string): [SqlType, string] {
-  const escaped = term.replace(/[[%_]/g, (ch) => `[${ch}]`);
+  const escaped = term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
   return [sql.NVarChar(210), `%${escaped}%`];
 }
 
@@ -26,7 +29,7 @@ export function whereClause(conditions: string[]): string {
 }
 
 /**
- * Runs a count query and a page query in a single round trip.
+ * Runs a count query and a page query on one connection.
  * `dataSql` must end with an ORDER BY clause.
  */
 export async function pagedQuery<T>(

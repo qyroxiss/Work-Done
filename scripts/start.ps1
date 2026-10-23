@@ -1,4 +1,4 @@
-<#
+﻿<#
   WorkDone one-click launcher (used by WorkDone.bat).
   - checks Node.js
   - installs dependencies and builds the app when needed
@@ -35,7 +35,7 @@ function Test-Running {
   # 127.0.0.1 (not localhost): Windows PowerShell may try IPv6 first and time out
   try { Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 3 | Out-Null; return $true }
   catch {
-    # Any HTTP answer (e.g. 503 while SQL Server is down) means the server process is up
+    # Any HTTP answer (e.g. 503 while the database is down) means the server process is up
     return [bool]($_.Exception.PSObject.Properties['Response'] -and $_.Exception.Response)
   }
 }

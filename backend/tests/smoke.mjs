@@ -33,12 +33,9 @@ const admin = client();
 const anon = client();
 
 console.log('# health & auth');
+// The company was created beforehand with add-client and db:seed (see docs/TESTING.md)
 let r = await anon('GET', '/setup/status');
-if (r.data.step === 'company') {
-  // Database prepared with db:setup + create-admin: register it as the first client
-  r = await anon('POST', '/setup/company', { companyName: 'Smoke Test Company', clientId: CLIENT });
-  check('register first client', r.status === 200, r.data);
-}
+check('setup complete', r.data.step === 'done', r.data);
 r = await anon('GET', '/health');
 check('health ok + db connected', r.status === 200 && r.data.database === 'connected', r.data);
 r = await anon('GET', '/work-items');

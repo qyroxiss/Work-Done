@@ -1,8 +1,14 @@
-// Drives the setup wizard API end to end. Usage: node wizard-test.mjs <lanIp>
-const BASE = 'http://127.0.0.1:3100/api';
+// Drives the setup wizard API end to end on an EMPTY PostgreSQL database.
+// Start the server without DATABASE_URL (it saves the connection string to backend/.env, so back that up first):
+//   node tests/setup-wizard.mjs http://127.0.0.1:3100 postgres://user:pass@localhost:5432/empty_db [lanIp]
+const BASE = `${process.argv[2] ?? 'http://127.0.0.1:3100'}/api`;
+const URL_ = process.argv[3];
+const LAN = process.argv[4] ? `http://${process.argv[4]}:${new URL(BASE).port}/api` : null;
 const CLIENT = 'TESTCO';
-const LAN = process.argv[2] ? `http://${process.argv[2]}:3100/api` : null;
-let passed = 0, failed = 0;
+if (!URL_) throw new Error('Pass the connection string of an empty test database.');
+
+let passed = 0;
+let failed = 0;
 const check = (name, cond, extra) => {
   if (cond) { passed++; console.log('  ok   ', name); }
   else { failed++; console.log('  FAIL ', name, extra !== undefined ? JSON.stringify(extra).slice(0, 600) : ''); }
@@ -19,65 +25,55 @@ async function call(method, path, body, base = BASE) {
   return { status: res.status, data };
 }
 
-const conn = { server: 'localhost\\SQL2012', authType: 'windows', encrypt: true, trustServerCertificate: true, database: 'WorkDoneDB_WizTest' };
-
+console.log('# database step');
 let r = await call('GET', '/health');
 check('health reports setup-required', r.data.status === 'setup-required', r.data);
 r = await call('GET', '/setup/status');
-check('status: needs setup, database step, local', r.data.needsSetup && r.data.step === 'database' && r.data.isLocal, r.data);
-const inst = r.data.environment.instances;
-check('detects SQL2012 instance with TCP on', inst.some((i) => i.name === 'SQL2012' && i.tcpEnabled && i.running), inst);
-check('detects SQL2022 with TCP off', inst.some((i) => i.name === 'SQL2022' && !i.tcpEnabled), inst.map((i) => i.name));
-check('sqlcmd available', r.data.environment.sqlcmdAvailable === true, r.data.environment);
+check('status: needs setup, database step, local', r.data.needsSetup && r.data.step === 'database' && r.data.isLocal && r.data.onServerComputer, r.data);
 r = await call('POST', '/auth/login', { clientId: CLIENT, username: 'x', password: 'y' });
 check('login in setup mode -> 503 SETUP_REQUIRED', r.status === 503 && r.data.code === 'SETUP_REQUIRED', r);
 
 if (LAN) {
   r = await call('GET', '/setup/status', undefined, LAN);
-  check('remote status: not local, no machine details', r.data.isLocal === false && !r.data.environment, r.data);
-  r = await call('POST', '/setup/test-connection', conn, LAN);
-  check('remote test-connection blocked', r.status === 403, r);
-  r = await call('POST', '/setup/install', conn, LAN);
-  check('remote install blocked', r.status === 403, r);
+  check('other computer: not allowed, no machine details', r.data.isLocal === false && !r.data.environment, r.data);
+  r = await call('POST', '/setup/test-connection', { url: URL_ }, LAN);
+  check('other computer: test-connection blocked', r.status === 403, r);
 }
 
-r = await call('POST', '/setup/test-connection', { ...conn, server: 'localhost\\SQL2022' });
-check('TCP-disabled instance gives clear error', r.data.ok === false && /TCP\/IP/i.test(r.data.error), r.data);
-r = await call('POST', '/setup/test-connection', { ...conn, server: "localhost'; DROP" });
-check('invalid server name rejected', r.status === 400, r.data);
-r = await call('POST', '/setup/test-connection', { ...conn, database: 'bad-name;' });
-check('invalid db name rejected', r.status === 400, r.data);
-r = await call('POST', '/setup/test-connection', conn);
-check('test connection (Windows auth)', r.data.ok && r.data.isSysadmin && r.data.mixedMode && r.data.databaseExists === false, r.data);
-r = await call('POST', '/setup/admin', { companyName: 'Test Company', clientId: CLIENT, username: 'admin', password: 'Admin12345' });
-check('admin step blocked before install', r.status === 403, r.data);
-
-r = await call('POST', '/setup/install', { ...conn, loadSampleData: true });
-check('install', r.status === 200 && r.data.log.length >= 6, r.data);
-console.log('     ', (r.data?.log ?? []).join(' | '));
+r = await call('POST', '/setup/test-connection', { url: 'mysql://nope' });
+check('non-PostgreSQL string rejected', r.status === 400, r.data);
+r = await call('POST', '/setup/test-connection', { url: URL_.replace(/:([^:@/]+)@/, ':wrong-password@') });
+check('wrong password explained', r.status === 200 && r.data.ok === false && /password/i.test(r.data.error), r.data);
+r = await call('POST', '/setup/test-connection', { url: URL_.replace(/\/[^/?]+(\?|$)/, '/no_such_db$1') });
+check('missing database explained', r.data.ok === false && /does not exist/i.test(r.data.error), r.data);
+r = await call('POST', '/setup/test-connection', { url: URL_ });
+check('test connection ok, may create tables', r.data.ok === true && r.data.canCreate === true && /PostgreSQL/.test(r.data.version), r.data);
+r = await call('POST', '/setup/database', { url: URL_ });
+check('connect saves settings and creates shared tables', r.status === 200 && r.data.log.length === 3, r.data);
 r = await call('GET', '/setup/status');
-check('status now admin step', r.data.needsSetup && r.data.step === 'admin', r.data);
-r = await call('POST', '/setup/install', conn);
-check('install not repeatable after success', r.status === 403, r.data);
-r = await call('POST', '/setup/admin', { companyName: 'Test Company', clientId: CLIENT, username: 'admin', password: 'short' });
-check('weak admin password rejected', r.status === 400, r.data);
-r = await call('POST', '/setup/admin', { companyName: 'Test Company', clientId: CLIENT, username: 'admin', password: 'Admin12345' });
-check('create admin', r.status === 201, r.data);
+check('now at the company step', r.data.step === 'admin', r.data);
+r = await call('POST', '/setup/database', { url: URL_ });
+check('database step closed afterwards', r.status === 403, r.data);
+
+console.log('# company step');
+r = await call('POST', '/setup/admin', { companyName: 'Test Co', clientId: 'bad id', username: 'admin', password: 'Admin12345' });
+check('invalid Client ID rejected', r.status === 400, r.data);
+r = await call('POST', '/setup/admin', { companyName: 'Test Co', clientId: CLIENT.toLowerCase(), username: 'admin', password: 'short' });
+check('weak password rejected', r.status === 400, r.data);
+r = await call('POST', '/setup/admin', { companyName: 'Test Co', clientId: CLIENT.toLowerCase(), username: 'admin', password: 'Admin12345', loadSampleData: true });
+check('company and administrator created', r.status === 201 && r.data.log.some((l) => /Sample/.test(l)), r.data);
 r = await call('GET', '/setup/status');
 check('setup done', r.data.needsSetup === false && r.data.step === 'done' && !r.data.environment, r.data);
-r = await call('POST', '/setup/admin', { companyName: 'Test Company', clientId: CLIENT, username: 'admin2', password: 'Admin12345' });
-check('admin step closed after setup', r.status === 403, r.data);
-r = await call('POST', '/setup/system-action', { action: 'enable-tcp', instanceName: 'SQL2022' });
-check('system actions closed after setup', r.status === 403, r.data);
+r = await call('POST', '/setup/admin', { companyName: 'Again', clientId: 'X2', username: 'admin2', password: 'Admin12345' });
+check('setup cannot run twice', r.status === 403, r.data);
 
-r = await call('GET', '/health');
-check('health connected (app login)', r.data.database === 'connected', r.data);
+console.log('# sign in');
 r = await call('POST', '/auth/login', { clientId: CLIENT, username: 'admin', password: 'Admin12345' });
-check('admin can log in, no forced change', r.status === 200 && r.data.user.mustChangePassword === false, r.data);
-r = await call('GET', '/employees');
-check('seed data visible', r.status === 200 && r.data.total === 5, r.data);
-r = await call('POST', '/work-items', { title: 'Wizard test work', priority: 'High', employeeIds: [r.data.items[0].employeeId] });
-check('create work with app login', r.status === 201, r.data);
+check('administrator signs in, no forced change (chose own password)', r.status === 200 && r.data.user.mustChangePassword === false && r.data.company.name === 'Test Co', r.data);
+r = await call('GET', '/employees?pageSize=50');
+check('sample employees present', r.status === 200 && r.data.total === 5, r.data);
+r = await call('GET', '/setup/clients');
+check('client list on the server computer', r.status === 200 && r.data.items.length === 1 && r.data.items[0].schemaName === 'wd_testco', r.data);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
