@@ -11,13 +11,17 @@ await build({
   allowOverwrite: true,
   bundle: true,
   platform: 'node',
-  format: 'esm',
+  // Vercel's Node.js runtime loads the handler with require(), as CommonJS
+  format: 'cjs',
   target: 'node22',
   sourcemap: true,
   // pg's optional native driver is never installed
   external: ['pg-native'],
-  // Bundled CommonJS packages (express, pg) call require() for Node built-ins
-  banner: { js: "import { createRequire as __wdCreateRequire } from 'node:module'; const require = __wdCreateRequire(import.meta.url);" },
+  // The app finds its own folder with import.meta.url, which CommonJS does not have
+  define: { 'import.meta.url': '__wdImportMetaUrl' },
+  banner: { js: "const __wdImportMetaUrl = require('node:url').pathToFileURL(__filename).href;" },
+  // require() returns the Express app itself (with .default and .createApp still available)
+  footer: { js: 'if (module.exports && module.exports.default) module.exports = Object.assign(module.exports.default, module.exports);' },
   logLevel: 'warning',
 });
 console.log('bundled dist/app.js for Vercel');
