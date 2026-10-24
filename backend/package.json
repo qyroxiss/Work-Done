@@ -6,8 +6,8 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "dev": "node scripts/embed-sql.mjs && tsx watch src/server.ts",
+    "build": "node scripts/embed-sql.mjs && tsc -p tsconfig.json && node scripts/bundle-vercel.mjs",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --import tsx --test \"tests/unit/*.test.ts\"",
@@ -36,6 +36,7 @@
     "@types/mssql": "^9.1.11",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
     "mssql": "^11.0.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"

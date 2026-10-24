@@ -1,25 +1,11 @@
-import fs from 'node:fs';
+import { SQL } from './sql.generated.js';
 
 /**
- * The SQL scripts in backend/database. Each file is named with `new URL('…', import.meta.url)` so that
- * bundlers (Vercel's file tracing) see them and ship them with the function. The paths work from both
- * backend/src/database (development) and backend/dist/database (build).
+ * The SQL scripts of backend/database, embedded at build time (scripts/embed-sql.mjs), so the app runs the
+ * same wherever its files end up (office server, Vercel function). Edit the .sql files, then build.
  */
-const FILES = {
-  'main.sql': new URL('../../database/main.sql', import.meta.url),
-  'client.sql': new URL('../../database/client.sql', import.meta.url),
-  'seed.sql': new URL('../../database/seed.sql', import.meta.url),
-} as const;
-
-export type SqlFile = keyof typeof FILES;
-
-const cache = new Map<SqlFile, string>();
+export type SqlFile = keyof typeof SQL;
 
 export function readSqlFile(file: SqlFile): string {
-  let text = cache.get(file);
-  if (text === undefined) {
-    text = fs.readFileSync(FILES[file], 'utf8').replace(/^﻿/, '');
-    cache.set(file, text);
-  }
-  return text;
+  return SQL[file];
 }

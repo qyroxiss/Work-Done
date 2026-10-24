@@ -84,11 +84,15 @@ async function request<T>(method: string, url: string, body?: unknown, raw?: Raw
   }
 
   if (!res.ok) {
-    const payload = (data ?? {}) as { error?: string; code?: string; fields?: Record<string, string> };
+    // The app answers { error: "message" }; a hosting platform error (e.g. Vercel) is { error: { code, message } }
+    const payload = (data ?? {}) as { error?: string | { code?: string; message?: string }; code?: string; fields?: Record<string, string> };
+    const platform = typeof payload.error === 'object' && payload.error !== null ? payload.error : null;
     const err = new ApiError(
-      payload.error ?? `Request failed (${res.status})`,
+      platform
+        ? `${platform.message ?? 'Server error'} (${platform.code ?? res.status})`
+        : (payload.error as string | undefined) ?? `Request failed (${res.status})`,
       res.status,
-      payload.code,
+      platform?.code ?? payload.code,
       payload.fields,
     );
     if (res.status === 401 && !url.startsWith('/auth/login') && onUnauthorized) {
