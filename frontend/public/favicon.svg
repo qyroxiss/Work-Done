@@ -1,7 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="19" fill="#1B1B1A"/>
-  <g fill="none" stroke="#FAFAF9" stroke-width="5.6" stroke-linecap="round" transform="translate(10.6 10.6) scale(1.55)">
-    <circle cx="11" cy="11" r="6.5"/>
-    <path d="m15.5 15.5 4 4"/>
-  </g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256"><title>Q-WorkDone app icon</title><rect width="256" height="256" rx="58" fill="#121212"/><g transform="translate(38.4,38.4) scale(0.7)"><path fill-rule="evenodd" fill="#FFFFFF" d="M21.78,110.16 a77.0 77.0 0 1 0 154.00,0 a77.0 77.0 0 1 0 -154.00,0 Z M59.78,110.16 a39.0 39.0 0 1 0 78.00,0 a39.0 39.0 0 1 0 -78.00,0 Z"/><path fill="#4D94FF" d="M126.36,164.61 L168.78,207.03 A19.0 19.0 0 0 0 195.65,180.16 L153.23,137.74 A19.0 19.0 0 0 0 126.36,164.61 Z M198.67,203.10 L231.67,145.94 A19.0 19.0 0 0 0 198.76,126.94 L165.76,184.10 A19.0 19.0 0 0 0 198.67,203.10 Z"/></g></svg>

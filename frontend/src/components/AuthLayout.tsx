@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { Stack } from '@mantine/core';
-import { APP_NAME, BrandMark } from './Brand';
+import { BrandLogo } from './Brand';
 import { ThemeToggle } from './ThemeToggle';
 
 interface AuthLayoutProps {
@@ -22,8 +22,7 @@ export function AuthLayout({ eyebrow, title, subtitle, children, note, connected
     <div className="wd-auth">
       <header className="wd-auth-top">
         <span className="wd-brand" style={{ padding: 0 }}>
-          <BrandMark size={26} />
-          {APP_NAME}
+          <BrandLogo height={22} />
         </span>
         <ThemeToggle />
       </header>

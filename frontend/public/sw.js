@@ -4,7 +4,7 @@
  * - Pages always come from the server when it is reachable (falling back to the cached shell).
  * - API requests are never cached: work data is always live.
  */
-const CACHE = 'workdone-v1';
+const CACHE = 'workdone-v2';
 const SHELL = ['/', '/favicon.svg', '/manifest.webmanifest', '/icon-192.png'];
 
 self.addEventListener('install', (event) => {

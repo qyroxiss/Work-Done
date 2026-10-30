@@ -146,16 +146,14 @@ html:root[data-mantine-color-scheme='dark'] {
   font-size: 15px;
   white-space: nowrap;
 }
-.wd-logo {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--wd-ink);
-  color: var(--wd-ink-text);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+.brand-logo,
+.brand-mark {
+  display: block;
   flex-shrink: 0;
+  color: var(--wd-ink);
+}
+.brand-tick {
+  fill: var(--wd-accent);
 }
 .wd-nav-sep {
   width: 1px;

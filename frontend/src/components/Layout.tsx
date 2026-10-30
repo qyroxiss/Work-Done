@@ -24,7 +24,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useChat } from '../hooks/useChat';
 import { useConfirm } from '../hooks/useConfirm';
 import type { Role } from '../types';
-import { APP_NAME, BrandMark } from './Brand';
+import { APP_NAME, BrandLogo } from './Brand';
 import { PersonAvatar, Spinner } from './common';
 import { NotificationBell } from './NotificationBell';
 import { Shortcuts } from './Shortcuts';
@@ -108,8 +108,7 @@ export function Layout() {
       <nav className="wd-nav" aria-label="Main">
         <Burger opened={drawerOpen} onClick={drawer.toggle} hiddenFrom="md" size="sm" aria-label="Open menu" mx={6} />
         <NavLink to="/" className="wd-brand">
-          <BrandMark size={26} />
-          {APP_NAME}
+          <BrandLogo height={22} />
         </NavLink>
 
         <Group gap={2} visibleFrom="md" wrap="nowrap">
@@ -214,8 +213,7 @@ export function Layout() {
       >
         <Group justify="space-between" px={10} pt={6} pb={12} wrap="nowrap">
           <span className="wd-brand" style={{ padding: 0 }}>
-            <BrandMark size={26} />
-            {APP_NAME}
+            <BrandLogo height={22} />
           </span>
           <UnstyledButton onClick={drawer.close} aria-label="Close menu" className="wd-side-close">
             <X size={16} />
